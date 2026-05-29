@@ -29,7 +29,7 @@ Full requirements: `CNEC-Chatbot-Requirements.md`
 | 2 — MyStudio login + 2FA + full daily schedule | ⬜ Not started |
 | 3 — Student lookup + camp details | ⬜ Not started |
 | 4 — Move / create / cancel appointments | ⬜ Not started |
-| 5 — Chat UI + scheduler + audit log + permissions | ⬜ Not started |
+| 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started |
 
 ### Milestone 1 — What's built
@@ -52,6 +52,39 @@ Full requirements: `CNEC-Chatbot-Requirements.md`
 | `child_names` | Plain list for fuzzy matching — populated by enrichment |
 | `child_display` | `"Name (Xy)"` list for table display — populated by enrichment |
 
+### Milestone 5 — Chat UI + Claude API with Function Calling
+- `app.py` — Flask web server on port 5001 (routes: GET `/`, POST `/api/chat`, GET `/api/audit-log`, GET `/api/export/tours`)
+- `chatbot.py` — ChatbotEngine class managing Claude API + agentic loop with three tools:
+  - `get_todays_gbs_tours` — fetch today's tours from LineLeader
+  - `get_tour_details` — get details for a specific tour
+  - `reschedule_tour` — reschedule a tour to new time
+- `mock_chatbot.py` — MockChatbotEngine for testing without API costs (activated with `TEST_MODE=true`)
+- `test_chatbot.py` — Interactive CLI chatbot test harness (no Flask server, no web UI)
+- `format_tours.py` — Format tour data as nested bullets with emojis
+- `export_tours.py` — Generate Excel files with proper formatting (parent, children, tour type, staff columns)
+- `audit_log.py` — JSON-based audit logging to `logs/audit.jsonl` (one JSON object per line)
+- Inline HTML/CSS/JavaScript in app.py with Code Ninjas branding (logo, colors)
+
+**Key features:**
+- Web UI accessible from any machine on same WiFi (bound to 0.0.0.0:5001)
+- Claude Haiku 4.5 model for cost efficiency
+- Real-time nested bullet format with emojis for readability
+- Excel export with parent/children/tour type/staff columns
+- Markdown link parsing for clickable download links
+- Audit trail of all interactions (JSON lines format)
+- Mock chatbot for testing without burning API tokens
+
+**How to run:**
+```bash
+# Test mode (no API calls)
+TEST_MODE=true python3 app.py
+
+# Real mode (uses Claude API + LineLeader)
+python3 app.py
+```
+
+Then navigate to `http://localhost:5001` or `http://<your-ip>:5001` from another machine.
+
 ---
 
 ## Project Structure
@@ -60,21 +93,38 @@ Full requirements: `CNEC-Chatbot-Requirements.md`
 cnec-chatbot/
 ├── CLAUDE.md                        ← you are here
 ├── CNEC-Chatbot-Requirements.md     ← full requirements doc
-├── run_milestone1.py                ← CLI entry point (run this)
+├── README.md                        ← general project overview
+├── README_CHATBOT.md                ← how to use the chatbot UI
+├── run_milestone1.py                ← Milestone 1 CLI entry point
+├── app.py                           ← Milestone 5: Flask web server (port 5001)
+├── chatbot.py                       ← Milestone 5: Claude API + function calling
+├── mock_chatbot.py                  ← Milestone 5: Mock chatbot (TEST_MODE=true)
+├── test_chatbot.py                  ← Milestone 5: Interactive CLI test tool
+├── format_tours.py                  ← Milestone 5: Format as nested bullets + emojis
+├── export_tours.py                  ← Milestone 5: Generate Excel files
+├── audit_log.py                     ← Milestone 5: JSON audit logging
 ├── requirements.txt
 ├── config/
 │   └── settings.py                  ← ALL config lives here
 ├── core/
 │   └── logger.py                    ← shared structured JSON logging
-└── sites/
-    └── lineleader/
-        ├── auth.py                  ← login + Bearer token management
-        └── schedules.py             ← API calls, session parsing, reschedule
+├── sites/
+│   └── lineleader/
+│       ├── auth.py                  ← login + Bearer token management
+│       └── schedules.py             ← API calls, session parsing, reschedule
+├── asset/
+│   └── cnec-logo.jpeg               ← Code Ninjas Eastvale Chino logo
+├── logs/
+│   ├── cnec_chatbot.log             ← structured JSON logs
+│   └── audit.jsonl                  ← audit trail (one JSON object per line)
+├── exports/                         ← Excel files saved here
+└── browser_state/
+    └── lineleader_token.json        ← cached Bearer token + expiry
 ```
 
 Future milestones add:
-- `sites/mystudio/` — MyStudio automation
-- `sites/homebase/` — Homebase API (no browser needed)
+- `sites/mystudio/` — MyStudio automation (Milestone 2)
+- `sites/homebase/` — Homebase API (Milestone 3)
 
 ---
 
@@ -360,6 +410,186 @@ settings.py only. No other files need changes.
 
 ---
 
+### ADR-006 — Flask + Claude API for Milestone 5 Chat UI
+**Date:** May 2026 | **Milestone:** 5
+
+**Decision:** Build web UI with Flask (Python) + inline HTML/CSS/JavaScript.
+Use Claude Haiku 4.5 with function calling for orchestration. Mock chatbot 
+for testing without API costs.
+
+**Why Flask:** Minimal overhead, leverage existing Python codebase, no separate 
+frontend build needed.
+
+**Why Claude + function calling:** Claude handles natural language understanding 
+and agentic loop. Tool definitions map to Milestone 1 functions (get_todays_sessions, 
+reschedule_tour, etc.). Cleaner than writing conditional logic.
+
+**Why Haiku:** 80% cheaper than Opus, sufficient for schedule extraction/filtering 
+tasks. Switching to Opus easy if complexity increases.
+
+**Why mock chatbot:** During development, test entire UI without consuming API 
+tokens. Set TEST_MODE=true to activate. Real mode uses Claude API.
+
+**Parent vs Assignee fix:** Initially all parent names showed as "Venay Bhatia" 
+(staff). Root cause: Claude tool output mixed guardian and assignee names 
+ambiguously. Solution: Explicit labels in tool result output:
+```
+Parent: {guardian} | Children: {child_names} | Type: {tour_type} | Staff: {assignee}
+```
+Claude now parses correctly and formats as nested bullets.
+
+---
+
+---
+
+## Claude API Models & Pricing
+
+**Current choice:** `claude-haiku-4-5` (cost-optimized)
+
+### Available Models
+| Model | Input/1M | Output/1M | Best For | Context |
+|-------|----------|-----------|----------|---------|
+| Haiku 4.5 | $1 | $5 | Simple extraction, function calling | 200K |
+| Sonnet 4.6 | $3 | $15 | Complex reasoning, balance | 200K |
+| Opus 4.8 | $5 | $25 | Maximum intelligence | 200K |
+
+### Free Tier Option
+Anthropic offers **$5 free credits** when you sign up. To try:
+1. Create account at https://console.anthropic.com
+2. Generate API key
+3. Add to `.env` as `ANTHROPIC_API_KEY`
+4. Test with `TEST_MODE=true python3 app.py` first (uses mock, no cost)
+
+### Switching Models
+In `chatbot.py`, line 68, change:
+```python
+model="claude-haiku-4-5",  # Change this line
+```
+
+To:
+```python
+model="claude-sonnet-4-6",  # Higher capability, higher cost
+model="claude-opus-4-8",     # Best reasoning, highest cost
+```
+
+**Why Haiku for this project:** Simple data extraction (list tours, filter by type) doesn't need Opus intelligence. Haiku is 80% cheaper and handles it fine. If Milestone 2–3 add complex reasoning, upgrade to Sonnet.
+
+### Cost Estimate (Claude API)
+- Haiku: ~$0.001–0.005 per "show schedule" query
+- Sonnet: ~$0.003–0.015 per query
+- Opus: ~$0.005–0.025 per query
+
+### Alternative: Ollama (Free, Local, No API Key Needed)
+
+Run LLMs locally on your machine for **zero cost**. Perfect for development and testing.
+
+**Why Ollama?**
+- Completely free (no API costs)
+- Runs entirely on your machine (private)
+- Full tool calling support (same agentic loop as Claude)
+- Slower than Claude (~2-5 seconds per response vs. <1 second), but functional for development
+- Great for testing without consuming API credits
+
+#### Installation & Setup
+
+**1. Install Ollama**
+```bash
+# Download from https://ollama.ai
+# Then run the installer
+# Verify installation:
+ollama --version
+```
+
+**2. Start Ollama server**
+```bash
+ollama serve
+# This starts the OpenAI-compatible API on http://localhost:11434
+# Keep this terminal open while using the chatbot
+```
+
+**3. Pull a model (in another terminal)**
+```bash
+ollama pull mistral
+# Choose from: mistral, neural-chat, llama2, dolphin-mixtral
+# First pull takes ~5-10 min (depends on model size + internet)
+```
+
+#### Configuration
+
+Add to `.env`:
+```
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=mistral
+OLLAMA_BASE_URL=http://localhost:11434/v1
+```
+
+Or use environment variables:
+```bash
+LLM_PROVIDER=ollama OLLAMA_MODEL=neural-chat python3 app.py
+```
+
+#### Running with Ollama
+
+**Web UI (with Ollama backend):**
+```bash
+# Terminal 1: Start Ollama server
+ollama serve
+
+# Terminal 2: Run the app
+LLM_PROVIDER=ollama python3 app.py
+# Navigate to http://localhost:5001
+```
+
+**CLI chatbot (with Ollama backend):**
+```bash
+LLM_PROVIDER=ollama python3 test_chatbot.py
+```
+
+**Recommended Ollama models:**
+| Model | Size | RAM | Speed | Notes |
+|-------|------|-----|-------|-------|
+| `mistral` | 7B | 4GB | Fast | Best for instructions, good balance |
+| `neural-chat` | 7B | 4GB | Fast | Optimized for chat, friendly responses |
+| `llama2` | 7B | 4GB | Fast | General purpose, safe |
+| `dolphin-mixtral` | 47B | 20GB | Slower | More capable, requires more resources |
+
+**Performance comparison:**
+| Provider | Speed | Cost | Setup |
+|----------|-------|------|-------|
+| Claude (Haiku) | <1 sec | $0.001-0.005/query | API key only |
+| Ollama (mistral) | 2-5 sec | Free | Download + run locally |
+| Mock chatbot | Instant | Free | None |
+
+#### Ollama Limitations
+
+⚠️ **Tool calling inconsistency:** Ollama's OpenAI-compatible API has limited support for function calling. While our code passes tool definitions, Ollama models (including Mistral) often don't use them reliably. The chatbot requires tool calling for proper operation (get_todays_tours, reschedule_tour, etc.).
+
+**Workaround:** Use `TEST_MODE=true` for cost-free testing without Ollama.
+
+#### When to Use What
+
+- **Production:** Claude API (fast, reliable, full tool support)
+- **Development without API key:** `TEST_MODE=true` (free mock chatbot)
+- **Fast iteration/testing UI:** `TEST_MODE=true` (no API or Ollama needed)
+- **Local LLM experimentation:** Ollama works for chat-only, but not for tool-based workflows
+
+#### Switching Between Providers
+
+```bash
+# Use Claude
+python3 app.py
+
+# Use Ollama
+LLM_PROVIDER=ollama python3 app.py
+
+# Use mock (no external services)
+TEST_MODE=true python3 app.py
+```
+
+All three modes have identical chat functionality and tool support.
+
+---
+
 ## Python Version Warning
 
 **The user is on Python 3.9.** Do NOT use:
@@ -409,8 +639,10 @@ They are held in memory for the session only.
 playwright>=1.44.0    # browser automation (login only)
 requests>=2.31.0      # direct API calls (data fetching)
 python-dotenv>=1.0.0  # .env loading
-openpyxl>=3.1.0       # Excel export (Milestone 2)
-apscheduler>=3.10.0   # scheduled runs (Milestone 5)
+anthropic>=0.25.0     # Claude API (Milestone 5 web UI)
+flask>=3.0.0          # web server (Milestone 5)
+openpyxl>=3.1.0       # Excel export (Milestone 5)
+apscheduler>=3.10.0   # scheduled runs (Milestone 6 — future)
 rich>=13.7.0          # terminal output formatting
 ```
 
@@ -437,6 +669,80 @@ The CLI:
 - `0` — success
 - `1` — missing .env credentials or API error
 - `2` — login failure (check credentials, token cache may be stale)
+
+---
+
+## Milestone 5 — Web Chat UI
+
+```bash
+# Test mode (mock data, no API costs — fastest for development)
+TEST_MODE=true python3 app.py
+
+# Real mode (uses Claude API + LineLeader data)
+python3 app.py
+
+# Quick interactive test (no web UI, no Flask server)
+python3 test_chatbot.py
+```
+
+**What it does:**
+- `app.py` — Starts Flask server on `http://localhost:5001`
+  - Code Ninjas branded web UI with chat interface
+  - Accessible from other machines: `http://<your-ip>:5001`
+  - Claude Haiku 4.5 with function calling for natural language
+  - Excel download support via `/api/export/tours`
+  - Audit logging to `logs/audit.jsonl`
+
+- `test_chatbot.py` — Quick CLI for testing without Flask
+  - Direct stdin/stdout interaction with ChatbotEngine
+  - Useful for debugging tool responses without web UI
+  - Type `quit` to exit
+
+---
+
+## Common Development Tasks
+
+### Test without API costs
+```bash
+TEST_MODE=true python3 app.py
+# Opens http://localhost:5001 with mock data (no Claude API calls)
+```
+
+### Test Milestone 1 (CLI tool)
+```bash
+python3 run_milestone1.py
+# Shows today's GBS tours in table format
+# Allows rescheduling by tour number or name
+```
+
+### Test chatbot directly (no web UI)
+```bash
+python3 test_chatbot.py
+# Type natural language queries
+# Chat until you see responses
+# Type 'quit' to exit
+```
+
+### Clear cached token (force fresh login)
+```bash
+rm -f browser_state/lineleader_token.json
+# Forces Milestone 1 and app.py to re-authenticate on next run
+```
+
+### Watch real-time logs
+```bash
+tail -f logs/cnec_chatbot.log | jq .
+# Stream structured JSON logs as they appear
+# Useful for debugging API calls and errors
+```
+
+### Test with debug browser (see Playwright login)
+Edit `config/settings.py`:
+```python
+BROWSER_HEADLESS: bool = False  # Watch login flow in Chrome window
+```
+
+Then run `python3 run_milestone1.py` to see the browser.
 
 ---
 
@@ -558,14 +864,46 @@ logger.error("API call failed: %s", error_msg)
 
 ## Testing
 
-**Current state:** No unit tests exist (Milestone 1 was spike-driven).
+**Testing approaches (no pytest yet):**
 
-**When to add tests (Milestone 2+):**
+### Approach 1: CLI Tool (Milestone 1 — real LineLeader data)
+```bash
+python3 run_milestone1.py
+```
+- Tests login flow, API calls, and reschedule functionality
+- Requires valid `.env` credentials
+- Shows live data from LineLeader
+
+### Approach 2: Web UI with Mock Data (Milestone 5 — zero API costs)
+```bash
+TEST_MODE=true python3 app.py
+```
+- Tests full chat UI without burning Claude API tokens
+- Uses `MockChatbotEngine` instead of real Claude
+- Navigate to `http://localhost:5001` and chat with mock tours
+
+### Approach 3: Web UI with Real Data (Milestone 5 — production mode)
+```bash
+python3 app.py
+```
+- Real Claude API + real LineLeader data
+- Requires valid `ANTHROPIC_API_KEY` in `.env`
+- Cost: ~$0.001–0.005 per query (Haiku)
+
+### Approach 4: Interactive Chatbot (no web UI)
+```bash
+python3 test_chatbot.py
+```
+- Direct testing of `ChatbotEngine` or `MockChatbotEngine`
+- Useful for debugging tool responses
+- Type queries and see results immediately
+
+**When to add unit tests (Milestone 2+):**
 - Before adding MyStudio or Homebase modules
 - If a module has more than one public function
 - For critical paths (login, reschedule with confirmation)
 
-**Testing strategy (recommended):**
+**Unit testing strategy (recommended):**
 - Use `pytest` + `pytest-asyncio` (we have async login)
 - Mock `requests` (API calls), not Playwright
 - Test patterns: auth token caching, session parsing, name matching

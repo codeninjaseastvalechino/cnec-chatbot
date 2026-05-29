@@ -376,6 +376,11 @@ def _parse_single_item(
     a_last = item.get("assignee_last_name", "").strip()
     assignee_name = f"{a_first} {a_last}".strip()
 
+    logger.debug(
+        "Parsed item %s: guardian='%s %s', assignee='%s %s', student_name='%s'",
+        str(item.get("item_id")), first, last, a_first, a_last, student_name
+    )
+
     return GBSSession(
         student_name=student_name,
         start_time=start_time,
