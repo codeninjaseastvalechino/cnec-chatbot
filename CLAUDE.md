@@ -418,20 +418,167 @@ rich>=13.7.0          # terminal output formatting
 
 ## How to Run
 
+### Milestone 1 — GBS Tours + Reschedule
 ```bash
 cd cnec-chatbot
 source .venv/bin/activate
 python3 run_milestone1.py
 ```
 
-To force a fresh login (delete cached token):
+The CLI:
+1. Logs in to LineLeader (headless by default, token cached ~1 hour)
+2. Fetches today's Tours and displays a formatted table with child names/ages
+3. Prompts: "Reschedule a tour? (y/n)"
+4. If yes: enter by tour number (e.g. `1`) or name (e.g. `Journei`)
+5. If ambiguous name match: shows 2–3 choices, ask to be more specific
+6. Confirmation prompt before writing to the API
+
+**Exit codes:**
+- `0` — success
+- `1` — missing .env credentials or API error
+- `2` — login failure (check credentials, token cache may be stale)
+
+---
+
+## Development Commands
+
+### Debug Mode — Watch the Playwright browser login
+Edit `config/settings.py`:
+```python
+BROWSER_HEADLESS: bool = False  # Default is True
+```
+
+Run as usual:
+```bash
+python3 run_milestone1.py
+```
+
+A Chrome window will appear showing the login flow. Useful for:
+- Confirming OAuth2 PKCE flow completes
+- Checking for form selector changes
+- Diagnosing login errors visually
+
+---
+
+### Clear Cached Token (Force Fresh Login)
 ```bash
 rm -f browser_state/lineleader_token.json
 python3 run_milestone1.py
 ```
 
-To watch the browser during login (debug mode):
-Set `BROWSER_HEADLESS: bool = False` in `config/settings.py`
+Token is cached for ~1 hour (5-minute safety buffer before expiry). Use this if:
+- Login hangs or fails
+- Credentials were updated
+- Suspicious behavior (seeing old data)
+
+---
+
+### View Structured Logs
+All operations are logged to `logs/cnec_chatbot.log` as JSON (one record per line).
+
+View in real-time:
+```bash
+tail -f logs/cnec_chatbot.log | jq .
+```
+
+Grep for errors:
+```bash
+grep '"level": "ERROR"' logs/cnec_chatbot.log | jq .
+```
+
+Filter by module:
+```bash
+cat logs/cnec_chatbot.log | jq 'select(.module == "sites.lineleader.auth")'
+```
+
+**Log levels:**
+- File: `DEBUG+` (all messages)
+- Console: `INFO+` (only important messages)
+
+---
+
+### Logging in Code
+See `core/logger.py`. Pattern:
+
+```python
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+logger.info("Starting session")
+logger.error("API call failed: %s", error_msg)
+```
+
+---
+
+## Debugging & Troubleshooting
+
+### Login Fails
+**Symptom:** Exit code 2, or "Invalid credentials" error.
+
+**Debug steps:**
+1. Verify `.env` has correct `LINELEADER_USERNAME` and `LINELEADER_PASSWORD`
+2. Check credentials manually in a browser at `https://my.childcarecrm.com`
+3. Clear token cache: `rm -f browser_state/lineleader_token.json`
+4. Enable debug mode (`BROWSER_HEADLESS=False`) to watch the login flow
+5. Check `logs/cnec_chatbot.log` for `"level": "ERROR"` entries in `sites.lineleader.auth`
+
+**Common issues:**
+- Password changed — update `.env`
+- Account locked after failed attempts — wait 5 min, try again
+- Playwright version mismatch — run `playwright install chromium`
+
+---
+
+### API Call Fails (404, 500, timeout)
+**Symptom:** Error after login succeeds (token is valid).
+
+**Debug steps:**
+1. Check `logs/cnec_chatbot.log` — contains request URL, status code, response body
+2. Verify `LINELEADER_ORG_ID` and `LINELEADER_CENTER_ID` in `config/settings.py` are correct (currently `101178` and `102025`)
+3. Check if the ChildCareCRM API is down (test manually: `curl https://live.childcarecrm.com/api/v3/`)
+4. Verify token is fresh (less than 1 hour old): `cat browser_state/lineleader_token.json | jq '.expires_at'`
+
+**Typical flow on error:**
+- `get_todays_sessions()` returns empty list or error → no tours to show
+- `enrich_sessions_with_children()` fails on a single tour → shows that tour without child names
+- `reschedule_tour()` fails → confirmation prompt still shown (safety net)
+
+---
+
+### Token Expired Mid-Session
+**Symptom:** "Bearer token invalid" error halfway through a run.
+
+**Details:** Token is cached with expiry (~1 hour from login). A 5-minute safety buffer means re-login happens if token is < 5 min from expiry. If it somehow expires mid-session:
+
+1. Automatic re-login is triggered (Playwright logs in again, new token cached)
+2. Operation retries with new token
+3. If re-login fails, user is asked to verify credentials
+
+---
+
+## Testing
+
+**Current state:** No unit tests exist (Milestone 1 was spike-driven).
+
+**When to add tests (Milestone 2+):**
+- Before adding MyStudio or Homebase modules
+- If a module has more than one public function
+- For critical paths (login, reschedule with confirmation)
+
+**Testing strategy (recommended):**
+- Use `pytest` + `pytest-asyncio` (we have async login)
+- Mock `requests` (API calls), not Playwright
+- Test patterns: auth token caching, session parsing, name matching
+- Avoid testing Playwright directly (too fragile, slow)
+
+Example fixture:
+```python
+@pytest.fixture
+def mock_api_response(monkeypatch):
+    def _mock(endpoint, response_json):
+        monkeypatch.setattr("requests.get", lambda *a, **k: Mock(json=lambda: response_json))
+    return _mock
+```
 
 ---
 
