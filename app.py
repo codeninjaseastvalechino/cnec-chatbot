@@ -1,8 +1,8 @@
 """
 Flask web server for CNEC Chatbot with Claude API + function calling.
 
-Runs on localhost:5000 by default. Accessible from other machines on the same network
-at http://<your-ip>:5000.
+Runs on localhost:5001. Accessible from other machines on the same network
+at http://<your-ip>:5001.
 """
 
 from dotenv import load_dotenv
