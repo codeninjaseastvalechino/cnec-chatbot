@@ -52,14 +52,17 @@ Full requirements: `CNEC-Chatbot-Requirements.md`
 | `child_names` | Plain list for fuzzy matching — populated by enrichment |
 | `child_display` | `"Name (Xy)"` list for table display — populated by enrichment |
 
-### Milestone 5 — Chat UI + Claude API with Function Calling
+### Milestone 5 — Chat UI + Multi-Provider Claude API with Function Calling
+- **`llm_provider.py`** — Multi-provider abstraction (Claude, Ollama, extensible for others)
 - `app.py` — Flask web server on port 5001 (routes: GET `/`, POST `/api/chat`, GET `/api/audit-log`, GET `/api/export/tours`)
-- `chatbot.py` — ChatbotEngine class managing Claude API + agentic loop with three tools:
+  - Instantiates provider based on `LLM_PROVIDER` env var (defaults to Claude)
+  - Passes provider to ChatbotEngine
+- `chatbot.py` — ChatbotEngine class (provider-agnostic) with agentic loop and three tools:
   - `get_todays_gbs_tours` — fetch today's tours from LineLeader
   - `get_tour_details` — get details for a specific tour
   - `reschedule_tour` — reschedule a tour to new time
 - `mock_chatbot.py` — MockChatbotEngine for testing without API costs (activated with `TEST_MODE=true`)
-- `test_chatbot.py` — Interactive CLI chatbot test harness (no Flask server, no web UI)
+- `test_chatbot.py` — Interactive CLI chatbot test harness (works with any provider)
 - `format_tours.py` — Format tour data as nested bullets with emojis
 - `export_tours.py` — Generate Excel files with proper formatting (parent, children, tour type, staff columns)
 - `audit_log.py` — JSON-based audit logging to `logs/audit.jsonl` (one JSON object per line)
@@ -74,16 +77,89 @@ Full requirements: `CNEC-Chatbot-Requirements.md`
 - Audit trail of all interactions (JSON lines format)
 - Mock chatbot for testing without burning API tokens
 
-**How to run:**
-```bash
-# Test mode (no API calls)
-TEST_MODE=true python3 app.py
+**How to run (three ways):**
 
-# Real mode (uses Claude API + LineLeader)
-python3 app.py
+| Mode | Command | Cost | Speed | Tools | Best For |
+|------|---------|------|-------|-------|----------|
+| **Claude** | `python3 app.py` | ~$0.001-0.005/query | <1 sec | ✅ Full | Production, development |
+| **Ollama** | `LLM_PROVIDER=ollama python3 app.py` | Free | 2-5 sec | ⚠️ Limited | Cost-free testing (chat-only) |
+| **Mock** | `TEST_MODE=true python3 app.py` | Free | Instant | ✅ Simulated | UI testing, no API calls |
+
+Navigate to **http://localhost:5001** or **http://<your-ip>:5001** from another machine.
+
+**Requirements:**
+- Claude mode: Requires `ANTHROPIC_API_KEY` in `.env`
+- Ollama mode: Requires `ollama serve` running in another terminal
+- Mock mode: No external services needed
+
+---
+
+## Multi-Provider LLM Architecture
+
+**Key Innovation:** The chatbot is **provider-agnostic**. It can work with any LLM via a clean abstraction layer.
+
+### The Provider System (llm_provider.py)
+
+The `llm_provider.py` module provides:
+
+**1. LLMProvider (Abstract Base Class)**
+```python
+class LLMProvider(ABC):
+    @abstractmethod
+    def call(messages, system_prompt, tools) -> Dict:
+        """Call the LLM, return standardized response."""
 ```
 
-Then navigate to `http://localhost:5001` or `http://<your-ip>:5001` from another machine.
+**2. Implementations**
+- `ClaudeProvider` — Anthropic SDK, full tool support ✅
+- `OllamaProvider` — OpenAI-compatible API, limited tool support ⚠️
+
+**3. Unified Response Format**
+All providers return the same structure:
+```python
+{
+    "type": "tool_use" | "end_turn",     # What the LLM is doing
+    "content": str | dict,                # Text or tool info
+    "raw": <original_response>            # For debugging
+}
+```
+
+### How It Works
+
+1. **Environment-driven selection** — `LLM_PROVIDER=claude` or `LLM_PROVIDER=ollama`
+2. **Factory pattern** — `get_provider()` creates the right instance
+3. **Injected into ChatbotEngine** — `ChatbotEngine(provider=provider)`
+4. **Identical agentic loop** — Same tool calling flow for all providers
+
+### Adding a New Provider
+
+To add support for a new LLM (e.g., Google Gemini):
+
+```python
+# In llm_provider.py
+class GeminiProvider(LLMProvider):
+    def __init__(self, api_key: str, model: str = "gemini-1.5-pro"):
+        self.client = genai.Client(api_key=api_key)
+        self.model = model
+
+    def call(self, messages, system_prompt, tools):
+        # Translate to Gemini API format
+        response = self.client.messages.create(...)
+        
+        # Return standardized format
+        if response.contains_tool_calls():
+            return {"type": "tool_use", "content": {...}}
+        else:
+            return {"type": "end_turn", "content": text}
+```
+
+Then update `get_provider()` to handle the new option:
+```python
+elif provider_name == "gemini":
+    return GeminiProvider(api_key=os.getenv("GEMINI_API_KEY"))
+```
+
+**The beauty:** ChatbotEngine doesn't change. The agentic loop works identically for Gemini, Claude, or any future provider.
 
 ---
 
