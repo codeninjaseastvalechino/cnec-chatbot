@@ -1,7 +1,6 @@
-# CNEC Chatbot — Claude Code Briefing
+# CLAUDE.md
 
-This file is read automatically by Claude Code on every session.
-It contains everything needed to continue development without re-explaining context.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ---
 
@@ -16,6 +15,51 @@ multi-tenant SaaS product. Keep all code config-driven — no hardcoded
 center-specific values anywhere.
 
 Full requirements: `CNEC-Chatbot-Requirements.md`
+
+---
+
+## ⚠️ Python 3.9 Constraint (Critical)
+
+**The user is on Python 3.9.** Do NOT use new type hint syntax:
+- ❌ `str | None` → ✅ `Optional[str]`
+- ❌ `list[X]` → ✅ `List[X]`
+- ❌ `dict[str, X]` → ✅ `Dict[str, X]`
+
+Always import from `typing`: `from typing import Optional, List, Dict, Any, Union, Tuple`
+
+---
+
+## Quick Reference
+
+| Task | Command | Notes |
+|------|---------|-------|
+| **Setup** | `pip install -r requirements.txt && playwright install chromium` | One-time only |
+| **CLI (Milestone 1)** | `python3 run_milestone1.py` | Show/reschedule tours, real LineLeader data |
+| **Web UI (mock)** | `TEST_MODE=true python3 app.py` | Zero API costs, instant feedback |
+| **Web UI (real)** | `python3 app.py` | Uses Claude API + LineLeader data |
+| **Chatbot CLI** | `python3 test_chatbot.py` | Debug chatbot engine without web UI |
+| **Clear token** | `rm -f browser_state/lineleader_token.json` | Force fresh login |
+| **View logs** | `tail -f logs/cnec_chatbot.log \| jq .` | Stream structured JSON logs |
+| **Set provider** | `LLM_PROVIDER=ollama python3 app.py` | Switch to Ollama backend |
+
+---
+
+## Table of Contents
+
+- [Current Status](#current-status)
+- [Multi-Provider LLM Architecture](#multi-provider-llm-architecture)
+- [Project Structure](#project-structure)
+- [Environment Variables](#environment-variables) ← NEW
+- [How to Run](#how-to-run) ← REORGANIZED
+- [Dependencies & Setup](#dependencies--setup) ← NEW
+- [Development Commands](#development-commands)
+- [Testing](#testing) ← CLARIFIED
+- [Debugging & Troubleshooting](#debugging--troubleshooting)
+- [Claude API Models & Pricing](#claude-api-models--pricing)
+- [Safety & Design](#safety--design) ← NEW
+- [Architecture Decision Log](#architecture-decision-log)
+- [Open Questions](#open-questions)
+- [Users & Permissions](#users--permissions)
 
 ---
 
@@ -201,6 +245,27 @@ cnec-chatbot/
 Future milestones add:
 - `sites/mystudio/` — MyStudio automation (Milestone 2)
 - `sites/homebase/` — Homebase API (Milestone 3)
+
+---
+
+## Environment Variables
+
+All credentials and configuration live in `.env` (copy from `.env.example`). Critical variables:
+
+| Variable | Purpose | Required For | Example |
+|----------|---------|--------------|---------|
+| `LINELEADER_USERNAME` | LineLeader/ChildCareCRM login | Milestone 1 + all | `user@codeninjas.com` |
+| `LINELEADER_PASSWORD` | LineLeader password | Milestone 1 + all | (password) |
+| `ANTHROPIC_API_KEY` | Claude API access | Milestone 5 (real mode) | `sk-ant-...` |
+| `LLM_PROVIDER` | Which LLM backend to use | Milestone 5 | `claude` or `ollama` |
+| `CLAUDE_MODEL` | Which Claude model | Milestone 5 (Claude mode) | `claude-haiku-4-5` |
+| `OLLAMA_BASE_URL` | Ollama server URL | Milestone 5 (Ollama mode) | `http://localhost:11434/v1` |
+| `OLLAMA_MODEL` | Which Ollama model | Milestone 5 (Ollama mode) | `mistral` |
+
+**Important:**
+- `.env` is git-ignored (never commit it)
+- Copy `.env.example` and fill in real values
+- Test mode (`TEST_MODE=true`) needs NO credentials
 
 ---
 
@@ -636,66 +701,57 @@ LLM_PROVIDER=ollama python3 test_chatbot.py
 | Ollama (mistral) | 2-5 sec | Free | Download + run locally |
 | Mock chatbot | Instant | Free | None |
 
-#### Ollama Limitations
+#### Ollama Limitations ⚠️
 
-⚠️ **Tool calling inconsistency:** Ollama's OpenAI-compatible API has limited support for function calling. While our code passes tool definitions, Ollama models (including Mistral) often don't use them reliably. The chatbot requires tool calling for proper operation (get_todays_tours, reschedule_tour, etc.).
+**CRITICAL:** Ollama has inconsistent tool calling support. While the chatbot is designed to work with Ollama, real-world testing shows that Ollama models (including Mistral) often ignore tool definitions and don't call functions reliably.
 
-**Workaround:** Use `TEST_MODE=true` for cost-free testing without Ollama.
+**What breaks with Ollama:**
+- `get_todays_tours()` — doesn't call the tool, asks user to describe tours instead
+- `reschedule_tour()` — doesn't call the tool reliably
+- `get_tour_details()` — inconsistent results
 
-#### When to Use What
+**Workaround:** Use `TEST_MODE=true` for cost-free, reliable testing without Ollama. Mock mode provides instant feedback and zero API costs.
 
-- **Production:** Claude API (fast, reliable, full tool support)
-- **Development without API key:** `TEST_MODE=true` (free mock chatbot)
-- **Fast iteration/testing UI:** `TEST_MODE=true` (no API or Ollama needed)
-- **Local LLM experimentation:** Ollama works for chat-only, but not for tool-based workflows
+#### Comparison: Which to Use
+
+| Use Case | Command | Notes |
+|----------|---------|-------|
+| **Development (fastest)** | `TEST_MODE=true python3 app.py` | Instant, no API keys, no setup |
+| **Development (real data)** | `python3 app.py` | Real Claude, costs ~$0.001-0.005/query |
+| **Production** | `python3 app.py` | Claude API, reliable tool calling, ~$0.001-0.005/query |
+| **Free local testing** | Don't use Ollama | Tool calling doesn't work; use mock mode instead |
 
 #### Switching Between Providers
 
-```bash
-# Use Claude
-python3 app.py
-
-# Use Ollama
-LLM_PROVIDER=ollama python3 app.py
-
-# Use mock (no external services)
-TEST_MODE=true python3 app.py
-```
-
-All three modes have identical chat functionality and tool support.
+For complete examples, see [How to Run](#how-to-run) → [Milestone 5: Web Chat UI](#milestone-5-web-chat-ui).
 
 ---
 
-## Python Version Warning
+## Safety & Design
 
-**The user is on Python 3.9.** Do NOT use:
-- `str | None` → use `Optional[str]`
-- `list[X]` → use `List[X]`
-- `dict[str, X]` → use `Dict[str, X]`
-
-Always import from `typing`: `from typing import Optional, List, Dict, Any, Union`
-
----
-
-## Safety Rules (Non-Negotiable)
+### Safety Rules (Non-Negotiable)
 
 From requirements §8:
-- **Never write to a live site without explicit user confirmation**
+- **Never write to a live site without explicit user confirmation** — reschedule, cancel, create always require user approval
 - Any function that modifies data must have a confirmation step before executing
 - Ambiguous input → stop and ask, never assume
 - Unexpected site state → halt, do not touch anything, report to user
 
----
+### Design Principles
 
-## Config Philosophy
+- ✅ **Multi-tenant ready** — zero hardcoded values, everything in `config/settings.py` loaded from `.env`
+- ✅ **Config-driven** — to deploy for another Code Ninjas center, update `.env` and org/center IDs only
+- ✅ **Token caching** — Bearer tokens cached ~1 hour with 5-minute safety buffer
+- ✅ **Audit trail** — all interactions logged to `logs/audit.jsonl` (JSON lines format)
+- ✅ **No credential storage** — Homebase credentials entered at runtime, never saved
+
+### Config Philosophy
 
 Everything center-specific lives in `config/settings.py` loaded from `.env`.
 No hardcoded values in site modules. To deploy for another Code Ninjas center:
 update `.env` and the org/center IDs in `settings.py` only.
 
----
-
-## Credentials Strategy
+### Credentials Strategy
 
 | Site | Storage |
 |------|---------|
@@ -707,9 +763,36 @@ update `.env` and the org/center IDs in `settings.py` only.
 Homebase credentials must never be stored. Owner enters them at runtime.
 They are held in memory for the session only.
 
+
 ---
 
-## Dependencies
+## Dependencies & Setup
+
+### Initial Setup (One-Time)
+
+```bash
+# 1. Clone and navigate
+git clone https://github.com/codeninjaseastvalechino/cnec-chatbot.git
+cd cnec-chatbot
+
+# 2. Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate  # or: .venv\Scripts\activate on Windows
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Install Playwright browsers
+playwright install chromium
+
+# 5. Create .env from template
+cp .env.example .env
+# Edit .env and fill in LINELEADER_USERNAME, LINELEADER_PASSWORD, etc.
+```
+
+### Dependency Versions
+
+Listed in `requirements.txt` with version constraints (>=). Pinned versions only if stability issues arise.
 
 ```
 playwright>=1.44.0    # browser automation (login only)
@@ -720,22 +803,52 @@ flask>=3.0.0          # web server (Milestone 5)
 openpyxl>=3.1.0       # Excel export (Milestone 5)
 apscheduler>=3.10.0   # scheduled runs (Milestone 6 — future)
 rich>=13.7.0          # terminal output formatting
+openai>=1.0.0         # OpenAI SDK (Ollama compatibility)
+```
+
+### Dependency Management
+
+**Updating dependencies:**
+```bash
+# Update all dependencies to latest compatible versions
+pip install --upgrade -r requirements.txt
+
+# Update a specific package
+pip install --upgrade anthropic
+```
+
+**Playwright version note:** If you encounter browser automation issues, reinstall:
+```bash
+playwright install chromium --with-deps
 ```
 
 ---
 
 ## How to Run
 
-### Milestone 1 — GBS Tours + Reschedule
+### Prerequisite: Setup
+Before running any milestone, complete "Dependencies & Setup" above (one-time).
+
+Verify setup:
 ```bash
-cd cnec-chatbot
+source .venv/bin/activate
+python3 -c "import playwright; import requests; import anthropic; print('✅ Setup OK')"
+```
+
+---
+
+### Milestone 1: CLI Tool (GBS Tours + Reschedule)
+
+**Prerequisites:** LineLeader credentials in `.env`
+
+```bash
 source .venv/bin/activate
 python3 run_milestone1.py
 ```
 
-The CLI:
+**What it does:**
 1. Logs in to LineLeader (headless by default, token cached ~1 hour)
-2. Fetches today's Tours and displays a formatted table with child names/ages
+2. Fetches today's Tours and displays formatted table with child names/ages
 3. Prompts: "Reschedule a tour? (y/n)"
 4. If yes: enter by tour number (e.g. `1`) or name (e.g. `Journei`)
 5. If ambiguous name match: shows 2–3 choices, ask to be more specific
@@ -748,99 +861,88 @@ The CLI:
 
 ---
 
-## Milestone 5 — Web Chat UI
+### Milestone 5: Web Chat UI
+
+Choose one based on your needs:
+
+#### Option A: Mock Mode (Zero API Costs) ← Best for Development
+```bash
+source .venv/bin/activate
+TEST_MODE=true python3 app.py
+```
+
+**Prerequisites:** None (no API keys needed)
+
+**What it does:**
+- Starts Flask server on `http://localhost:5001`
+- Uses `MockChatbotEngine` (instant responses, no API calls)
+- Test full UI without burning Claude credits
+- Perfect for UI iteration and debugging
+
+**Access:** `http://localhost:5001` (local machine) or `http://<your-ip>:5001` (other machines)
+
+---
+
+#### Option B: Claude API Mode (Real Data)
+```bash
+source .venv/bin/activate
+python3 app.py
+```
+
+**Prerequisites:** `ANTHROPIC_API_KEY` in `.env`
+
+**What it does:**
+- Starts Flask server on `http://localhost:5001`
+- Uses real Claude API + real LineLeader data
+- Claude Haiku 4.5 with function calling
+- Excel download support via `/api/export/tours`
+- Audit logging to `logs/audit.jsonl`
+
+**Cost:** ~$0.001–0.005 per query (Haiku model)
+
+---
+
+#### Option C: Ollama Mode (Free Local LLM) ⚠️ Limited
+```bash
+# Terminal 1: Start Ollama server
+ollama serve
+
+# Terminal 2: Run the app
+source .venv/bin/activate
+LLM_PROVIDER=ollama python3 app.py
+```
+
+**Prerequisites:** Ollama installed + running, `OLLAMA_MODEL` in `.env`
+
+**⚠️ Important Limitation:** Ollama has inconsistent tool calling support. Use Option A (mock) instead for cost-free testing.
+
+See [Ollama Limitations](#ollama-limitations) for details.
+
+---
+
+### Chatbot Engine Testing (No Web UI)
+
+Debug the chatbot engine directly without Flask:
 
 ```bash
-# Test mode (mock data, no API costs — fastest for development)
-TEST_MODE=true python3 app.py
-
-# Real mode (uses Claude API + LineLeader data)
-python3 app.py
-
-# Quick interactive test (no web UI, no Flask server)
+source .venv/bin/activate
 python3 test_chatbot.py
 ```
 
 **What it does:**
-- `app.py` — Starts Flask server on `http://localhost:5001`
-  - Code Ninjas branded web UI with chat interface
-  - Accessible from other machines: `http://<your-ip>:5001`
-  - Claude Haiku 4.5 with function calling for natural language
-  - Excel download support via `/api/export/tours`
-  - Audit logging to `logs/audit.jsonl`
+- Interactive CLI chat with `ChatbotEngine` or `MockChatbotEngine`
+- Useful for debugging tool responses
+- Type natural language queries and see results immediately
+- Type `quit` to exit
 
-- `test_chatbot.py` — Quick CLI for testing without Flask
-  - Direct stdin/stdout interaction with ChatbotEngine
-  - Useful for debugging tool responses without web UI
-  - Type `quit` to exit
-
----
-
-## Common Development Tasks
-
-### Test without API costs
-```bash
-TEST_MODE=true python3 app.py
-# Opens http://localhost:5001 with mock data (no Claude API calls)
-```
-
-### Test Milestone 1 (CLI tool)
-```bash
-python3 run_milestone1.py
-# Shows today's GBS tours in table format
-# Allows rescheduling by tour number or name
-```
-
-### Test chatbot directly (no web UI)
-```bash
-python3 test_chatbot.py
-# Type natural language queries
-# Chat until you see responses
-# Type 'quit' to exit
-```
-
-### Clear cached token (force fresh login)
-```bash
-rm -f browser_state/lineleader_token.json
-# Forces Milestone 1 and app.py to re-authenticate on next run
-```
-
-### Watch real-time logs
-```bash
-tail -f logs/cnec_chatbot.log | jq .
-# Stream structured JSON logs as they appear
-# Useful for debugging API calls and errors
-```
-
-### Test with debug browser (see Playwright login)
-Edit `config/settings.py`:
-```python
-BROWSER_HEADLESS: bool = False  # Watch login flow in Chrome window
-```
-
-Then run `python3 run_milestone1.py` to see the browser.
+**Use this for:**
+- Testing Claude tool calling without web overhead
+- Debugging specific NLP queries
+- Iterating on chatbot logic
 
 ---
 
 ## Development Commands
-
-### Debug Mode — Watch the Playwright browser login
-Edit `config/settings.py`:
-```python
-BROWSER_HEADLESS: bool = False  # Default is True
-```
-
-Run as usual:
-```bash
-python3 run_milestone1.py
-```
-
-A Chrome window will appear showing the login flow. Useful for:
-- Confirming OAuth2 PKCE flow completes
-- Checking for form selector changes
-- Diagnosing login errors visually
-
----
 
 ### Clear Cached Token (Force Fresh Login)
 ```bash
@@ -892,6 +994,24 @@ logger.error("API call failed: %s", error_msg)
 
 ---
 
+### Debug Mode — Watch the Playwright Browser Login
+Edit `config/settings.py`:
+```python
+BROWSER_HEADLESS: bool = False  # Default is True
+```
+
+Run as usual:
+```bash
+python3 run_milestone1.py
+```
+
+A Chrome window will appear showing the login flow. Useful for:
+- Confirming OAuth2 PKCE flow completes
+- Checking for form selector changes
+- Diagnosing login errors visually
+
+---
+
 ## Debugging & Troubleshooting
 
 ### Login Fails
@@ -938,59 +1058,142 @@ logger.error("API call failed: %s", error_msg)
 
 ---
 
+### Web UI Not Accessible from Another Machine (Milestone 5)
+**Symptom:** Browser on another machine shows "can't reach this site" or "connection refused" when trying to access `http://your-ip:5001`
+
+**Debug steps:**
+
+1. **Verify Flask is running and bound to 0.0.0.0:**
+```bash
+# On the Mac running the app, you should see:
+# * Running on http://0.0.0.0:5001
+```
+
+2. **Get your Mac's actual IP address (not broadcast address):**
+```bash
+hostname -I
+# or
+ifconfig | grep "inet 192"
+# Look for 192.168.x.x where x is 1-254 (NOT .255, NOT 127.0.0.1)
+```
+
+3. **From the Windows machine, test connectivity:**
+```bash
+# Command Prompt on Windows:
+ipconfig  # find your Mac's IP
+ping 192.168.x.x  # should work if on same network
+# Then try: http://192.168.x.x:5001 in browser
+```
+
+4. **Allow Python through Mac Firewall:**
+   - System Settings → Network → Firewall → Firewall Options
+   - Click `+` button
+   - Select `/Users/yourname/.venv/bin/python3`
+   - Click "Add"
+
+5. **If still blocked, try a different port:**
+   - Edit `app.py` line 500:
+   ```python
+   app.run(host="0.0.0.0", port=8000, debug=True)  # Change 5001 to 8000
+   ```
+   - Restart Flask
+   - Try `http://192.168.x.x:8000`
+
+**Common causes:**
+- Mac firewall blocking incoming connections on port 5001
+- Getting the broadcast address (.255) instead of actual IP
+- Using `localhost` or `127.0.0.1` from another machine (won't work — must use actual IP)
+- Different subnets/networks (ping test confirms same network)
+
+---
+
 ## Testing
 
-**Testing approaches (no pytest yet):**
+**Current status:** Manual testing only. Unit tests (pytest) planned for Milestone 2+ before adding MyStudio/Homebase.
 
-### Approach 1: CLI Tool (Milestone 1 — real LineLeader data)
+### Testing Approaches (Manual)
+
+#### 1. CLI Tool — Real LineLeader Data (Milestone 1)
 ```bash
 python3 run_milestone1.py
 ```
+
 - Tests login flow, API calls, and reschedule functionality
 - Requires valid `.env` credentials
 - Shows live data from LineLeader
+- Exit code indicates success/failure (see [How to Run](#milestone-1-cli-tool-gbs-tours--reschedule))
 
-### Approach 2: Web UI with Mock Data (Milestone 5 — zero API costs)
+---
+
+#### 2. Web UI — Mock Data (Milestone 5, Zero Cost)
 ```bash
 TEST_MODE=true python3 app.py
 ```
-- Tests full chat UI without burning Claude API tokens
+
+- Tests full chat UI without burning Claude API tokens or LineLeader credits
 - Uses `MockChatbotEngine` instead of real Claude
 - Navigate to `http://localhost:5001` and chat with mock tours
+- **Best for:** UI iteration, testing chat flow, debugging without cost
 
-### Approach 3: Web UI with Real Data (Milestone 5 — production mode)
+---
+
+#### 3. Web UI — Real Claude + Real Data (Milestone 5, Production)
 ```bash
 python3 app.py
 ```
+
 - Real Claude API + real LineLeader data
 - Requires valid `ANTHROPIC_API_KEY` in `.env`
 - Cost: ~$0.001–0.005 per query (Haiku)
+- **Best for:** Integration testing, pre-production verification
 
-### Approach 4: Interactive Chatbot (no web UI)
+---
+
+#### 4. Chatbot Engine — Interactive CLI (Milestone 5, Debugging)
 ```bash
 python3 test_chatbot.py
 ```
+
 - Direct testing of `ChatbotEngine` or `MockChatbotEngine`
-- Useful for debugging tool responses
+- No web UI overhead
 - Type queries and see results immediately
+- Type `quit` to exit
+- **Best for:** Debugging tool responses, testing Claude function calling, rapid iteration
 
-**When to add unit tests (Milestone 2+):**
-- Before adding MyStudio or Homebase modules
-- If a module has more than one public function
-- For critical paths (login, reschedule with confirmation)
+---
 
-**Unit testing strategy (recommended):**
-- Use `pytest` + `pytest-asyncio` (we have async login)
-- Mock `requests` (API calls), not Playwright
-- Test patterns: auth token caching, session parsing, name matching
-- Avoid testing Playwright directly (too fragile, slow)
+### When to Add Unit Tests (Milestone 2+)
 
-Example fixture:
+Add pytest when:
+- Adding MyStudio or Homebase site modules (complex logic, high risk)
+- A module has more than one public function (testability needed)
+- For critical paths (login with 2FA, reschedule with confirmation, error recovery)
+
+### Unit Testing Strategy (Recommended)
+
+**Framework:** `pytest` + `pytest-asyncio` (we have async Playwright login)
+
+**What to mock:**
+- `requests` library (API calls) — use `monkeypatch` or `responses` library
+- `Playwright` navigation — avoid testing browser automation directly (too fragile, slow)
+
+**What to test:**
+- Auth token caching (expiry, refresh, invalidation)
+- Session/tour parsing (data structure integrity)
+- Name matching (fuzzy matching edge cases)
+- Error recovery (API failures, network timeouts)
+
+**Example fixture:**
 ```python
 @pytest.fixture
-def mock_api_response(monkeypatch):
+def mock_lineleader_api(monkeypatch):
     def _mock(endpoint, response_json):
-        monkeypatch.setattr("requests.get", lambda *a, **k: Mock(json=lambda: response_json))
+        def mock_get(*args, **kwargs):
+            class MockResponse:
+                def json(self): return response_json
+                status_code = 200
+            return MockResponse()
+        monkeypatch.setattr("requests.get", mock_get)
     return _mock
 ```
 

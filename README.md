@@ -118,7 +118,35 @@ Claude:
 http://<your-ip>:5001
 ```
 
-Find your IP: `ifconfig | grep inet`
+### Finding Your IP Address
+
+**On Mac:**
+```bash
+hostname -I
+# or
+ifconfig | grep "inet 192"
+```
+
+Look for something like `192.168.x.x` (NOT `127.0.0.1` and NOT ending in `.255`)
+
+**On Windows:**
+```bash
+ipconfig
+# Look for "IPv4 Address" under your WiFi network
+```
+
+### Mac Firewall Setup
+
+If you get "connection refused" or times out from another machine:
+
+1. **System Settings** → **Network** → **Firewall** → **Firewall Options**
+2. Click `+` button and add your Python installation:
+   ```
+   /Users/yourname/.venv/bin/python3
+   ```
+3. Allow the connection
+
+Then try again from the other machine.
 
 ---
 
