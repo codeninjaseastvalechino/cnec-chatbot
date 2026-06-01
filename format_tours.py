@@ -95,7 +95,7 @@ def format_unified_schedule(gbs_sessions, appointments, date=None) -> str:
             "time": appt.start_time,
             "type": appt.appointment_type,
             "name": appt.student_name,
-            "instructor": appt.instructor_name,
+            "instructor": getattr(appt, "parent_name", appt.instructor_name) or appt.instructor_name,
             "icon": "📝",
         })
 

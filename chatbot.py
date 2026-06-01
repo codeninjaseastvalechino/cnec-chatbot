@@ -32,7 +32,6 @@ from sites.lineleader.schedules import (
     enrich_sessions_with_children,
     reschedule_tour,
 )
-from sites.mystudio.auth import get_bearer_token as get_mystudio_token
 from sites.mystudio.schedules import get_todays_appointments
 from format_tours import format_unified_schedule
 from export_tours import create_unified_excel_file
@@ -350,17 +349,11 @@ When rescheduling, always confirm the details with the user before making change
             enrich_sessions_with_children(ll_token, gbs_sessions)
 
             # Fetch student appointments from MyStudio
-            ms_token = asyncio.run(get_mystudio_token())
-            # Note: get_todays_appointments is async, but we'll handle it synchronously for now
-            # TODO: Refactor chatbot to fully support async after Milestone 2
             appointments = []
             try:
-                # Create a new event loop if needed
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                appointments = loop.run_until_complete(get_todays_appointments())
+                appointments = get_todays_appointments()
             except Exception as e:
-                logger.warning(f"Failed to fetch MyStudio appointments: {e}")
+                logger.warning("Failed to fetch MyStudio appointments: %s", e)
                 appointments = []
 
             # Format unified schedule
