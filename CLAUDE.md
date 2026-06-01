@@ -65,20 +65,20 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ## Current Status
 
-**Active milestone: Milestone 2 — MyStudio login + 2FA + full daily schedule**
+**Active milestone: Milestone 3 — Integrate MyStudio into chat UI**
 
 | Milestone | Status |
 |-----------|--------|
 | 1 — LineLeader login + GBS/JR GBS tour pull + reschedule | ✅ Complete |
-| 2 — MyStudio login + 2FA + full daily schedule | 🔄 In Progress |
-| 3 — Student lookup + camp details | ⬜ Not started |
+| 2 — MyStudio login + 2FA + full daily schedule | ✅ Complete (2026-06-01) |
+| 3 — Integrate MyStudio into chat UI + mock chatbot | 🔄 In Progress |
 | 4 — Move / create / cancel appointments | ⬜ Not started |
 | 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started |
 
-### Milestone 2 — What's built so far (2026-06-01)
+### Milestone 2 — COMPLETE (2026-06-01)
 
-**Login + schedule fetch working. Student roster per timeslot is next.**
+**Full MyStudio integration: login + 2FA + schedule + student roster all working.**
 
 #### Files created/updated:
 - `sites/mystudio/auth.py` — **COMPLETE REWRITE** (cookie-based auth, not bearer tokens)
@@ -141,25 +141,31 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | `end_time` | from `end_time` in student record (e.g., "2026-06-01 16:00:00") |
 
 #### What's confirmed working (2026-06-01):
-- ✅ Direct API login (no Playwright needed) — `mystudio_login_api.py`
-- ✅ OTP 2FA flow — credentials POST triggers email, OTP submitted with `remember_me: true`
-- ✅ Session cookie caching — `browser_state/mystudio_cookies.json`
-- ✅ Auto-login on second run — `verifySession` confirms session, skips OTP entirely
-- ✅ `getClassScheduledetails` — returns class types + time slots with counts
-- ✅ Live data confirmed: CREATE (CODING), JR, SCRATCH PLUS classes with correct slot counts
+- ✅ Direct API login with OTP 2FA — `sites/mystudio/auth.py`
+- ✅ Session cookie caching (30 days) — `browser_state/mystudio_cookies.json`
+- ✅ Auto-login on second run — loads cached cookies, no OTP needed
+- ✅ `getClassScheduledetails` — returns all class types + time slots
+- ✅ `getClassdatatabledetails` — returns student roster for each time slot
+- ✅ Full daily schedule parsing — 27 students across 9 time slots (example output)
+- ✅ Test script `test_updated_schedules.py` shows all time slots with students
 
-#### ⬜ TODO NEXT — Extract student details per timeslot:
-`getClassdatatabledetails` is being called but returning 0 students (schedule shows slots correctly but roster is empty).
-
-**Steps to debug:**
-1. Print the raw response from `getClassdatatabledetails` for one slot to see what's coming back
-2. The request uses `application/x-www-form-urlencoded` with `X-Requested-With: XMLHttpRequest` — check if any of these headers are missing or wrong
-3. Compare request exactly against the working Playwright capture (body format in `test_mystudio_api.py` vs what `mystudio_login_api.py` sends)
-4. Once working, wire it into `sites/mystudio/schedules.py` so `get_todays_appointments()` returns real data
-
-**Quick debug — add this to `mystudio_login_api.py` get_schedule() after the students POST:**
+#### Key fix (what made roster work):
+The API requires the **full DataTables request with all 23 column definitions**, not just minimal form data.
+Previously we were sending:
 ```python
-print(f"       RAW: {students.status_code} | {students.text[:300]}")
+{"draw": "1", "company_id": "578", "class_appointment_times_id": "27389", ...}  # ❌ 500 error
+```
+Now sending:
+```python
+{
+  "draw": "1",
+  "columns[0][data]": "",
+  "columns[1][data]": "show_icon",
+  "columns[2][data]": "Participant",
+  ...
+  "columns[22][data]": "",
+  # ... all 23 columns defined
+}  # ✅ 200 OK, data returned
 ```
 
 #### Auth details confirmed:

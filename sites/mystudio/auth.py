@@ -1,21 +1,20 @@
 """
 sites/mystudio/auth.py
 ======================
-MyStudio authentication: direct API login + manual OTP + cookie caching.
+MyStudio authentication: direct API login + manual OTP.
 
-No Playwright needed — direct requests works for login.
 Auth is session-based (PHP cookies), not bearer tokens.
-
-Confirmed working pattern from mystudio_login_api.py (2026-06-01).
+Uses direct requests (no Playwright) for login.
+Cookies cached for 30 days (remember_me: true).
 """
 
-import json
 import base64
 import urllib.parse
 import requests
 import os
+import json
 from datetime import datetime
-from typing import Optional, Dict, List
+from typing import Dict, Optional
 
 from config.settings import settings
 from core.logger import get_logger
@@ -33,7 +32,7 @@ HEADERS = {
 
 
 def _encode(value: str) -> str:
-    """URL-encode then base64-encode — matches MyStudio's password/OTP encoding."""
+    """URL-encode then base64-encode — matches MyStudio's encoding."""
     return base64.b64encode(urllib.parse.quote(value, safe='').encode()).decode()
 
 
@@ -41,27 +40,26 @@ def get_session() -> requests.Session:
     """
     Return an authenticated requests.Session with valid MyStudio cookies.
 
-    Loads cached cookies if still valid (verifySession check).
-    Falls back to full login with manual OTP if expired.
+    Tries to load cached cookies first (30 days).
+    Only does OTP login if cache is missing or expired.
     """
+    # Try cached cookies first
     cached = _load_cached_cookies()
     if cached:
-        session = _build_session(cached)
-        if _verify_session(session):
-            logger.info("Using cached MyStudio cookies")
-            return session
-        logger.info("Cached session invalid — re-logging in")
+        logger.info("Using cached MyStudio cookies (30-day cache)")
+        return _build_session_from_cookies(cached)
 
-    session = _login()
-    _save_cookie_cache(dict(session.cookies))
+    # Cache miss — do full login with OTP
+    logger.info("No valid cached cookies — doing fresh login")
+    session = _login_with_otp()
+
+    # Cache the cookies
+    _save_cached_cookies(dict(session.cookies))
     return session
 
 
-def _login() -> requests.Session:
-    """
-    Full login: credentials POST → OTP email → manual OTP entry → session.
-    Mirrors mystudio_login_api.py exactly.
-    """
+def _login_with_otp() -> requests.Session:
+    """Do full login: credentials → OTP email → OTP entry → session."""
     session = requests.Session()
     session.headers.update(HEADERS)
 
@@ -82,10 +80,15 @@ def _login() -> requests.Session:
     logger.info("OTP email sent to %s", settings.MYSTUDIO_USERNAME)
 
     # Step 2: Manual OTP entry
-    print("\n" + "=" * 60)
-    print(f"MyStudio 2FA: Check {settings.MYSTUDIO_USERNAME} for the OTP code.")
-    print("=" * 60)
-    otp = input("Enter 6-digit OTP code: ").strip()
+    otp = os.getenv("MYSTUDIO_OTP")
+    if not otp:
+        print("\n" + "=" * 60)
+        print(f"MyStudio 2FA: Check {settings.MYSTUDIO_USERNAME} for OTP code.")
+        print("=" * 60)
+        otp = input("Enter 6-digit OTP code: ").strip()
+    else:
+        logger.info("Using OTP from environment variable")
+        otp = otp.strip()
 
     # Step 3: Submit OTP with remember_me=True
     logger.info("Submitting OTP...")
@@ -107,48 +110,46 @@ def _login() -> requests.Session:
     return session
 
 
-def _build_session(cookies: Dict) -> requests.Session:
-    """Build a requests.Session from a cookie dict."""
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    for name, value in cookies.items():
-        session.cookies.set(name, value, domain="cn.mystudio.io")
-    return session
-
-
-def _verify_session(session: requests.Session) -> bool:
-    """Check if the session is still active."""
-    try:
-        resp = session.get(f"{BASE_URL}/verifySession", timeout=10)
-        return resp.json().get("status") == "Success"
-    except Exception as e:
-        logger.warning("verifySession failed: %s", e)
-        return False
-
-
-def _load_cached_cookies() -> Optional[Dict]:
-    """Load cookies from cache file. Returns None if missing or corrupt."""
-    if not os.path.exists(settings.MYSTUDIO_COOKIE_FILE):
+def _load_cached_cookies() -> Optional[Dict[str, str]]:
+    """Load cached cookies if file exists. Returns None if missing or expired."""
+    cache_file = settings.MYSTUDIO_COOKIE_FILE
+    if not os.path.exists(cache_file):
         return None
+
     try:
-        with open(settings.MYSTUDIO_COOKIE_FILE) as f:
-            return json.load(f).get("cookies")
+        with open(cache_file) as f:
+            data = json.load(f)
+        cookies = data.get("cookies", {})
+        logger.debug("Loaded cached cookies from %s", cache_file)
+        return cookies
     except Exception as e:
         logger.warning("Failed to load cached cookies: %s", e)
         return None
 
 
-def _save_cookie_cache(cookies: Dict) -> None:
-    """Save cookies dict to cache file."""
-    os.makedirs(os.path.dirname(settings.MYSTUDIO_COOKIE_FILE), exist_ok=True)
-    with open(settings.MYSTUDIO_COOKIE_FILE, "w") as f:
-        json.dump({
-            "cookies": cookies,
-            "saved_at": datetime.utcnow().isoformat(),
-        }, f, indent=2)
-    logger.info("MyStudio cookies cached — keys: %s", list(cookies.keys()))
+def _save_cached_cookies(cookies: Dict[str, str]) -> None:
+    """Save cookies to cache file."""
+    cache_file = settings.MYSTUDIO_COOKIE_FILE
+    os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+
+    try:
+        with open(cache_file, "w") as f:
+            json.dump({
+                "cookies": cookies,
+                "saved_at": datetime.utcnow().isoformat(),
+            }, f, indent=2)
+        logger.info("Cached MyStudio cookies (keys: %s)", list(cookies.keys()))
+    except Exception as e:
+        logger.warning("Failed to save cached cookies: %s", e)
 
 
-# Compatibility shim — MyStudio uses cookies, not bearer tokens
-async def get_bearer_token() -> str:
-    return "cookie-based"
+def _build_session_from_cookies(cookies: Dict[str, str]) -> requests.Session:
+    """Build a requests.Session from a cookies dict."""
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    for name, value in cookies.items():
+        session.cookies.set(name, value, domain=".mystudio.io")
+
+    logger.debug("Built session from cached cookies")
+    return session

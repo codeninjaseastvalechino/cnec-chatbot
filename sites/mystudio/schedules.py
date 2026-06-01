@@ -10,6 +10,7 @@ Confirmed endpoints (from Playwright network capture 2026-05-31):
 
 from typing import List, Dict, Any, Optional
 from datetime import datetime, date
+from urllib.parse import urlencode
 
 from config.settings import settings
 from core.logger import get_logger
@@ -22,15 +23,48 @@ BASE_URL = settings.MYSTUDIO_API_URL
 COMPANY_ID = settings.MYSTUDIO_COMPANY_ID
 
 
+def _initialize_session(session) -> None:
+    """
+    Call initialization endpoints that the browser calls after login.
+    These must be called before getClassdatatabledetails will work.
+    """
+    try:
+        # checkClassScheduleFeatureAvailabilty
+        session.get(f"{BASE_URL}/checkClassScheduleFeatureAvailabilty", params={
+            "class_scheduler_verion": "2",
+            "company_id": COMPANY_ID,
+        }, timeout=10)
+        logger.debug("Called checkClassScheduleFeatureAvailabilty")
+
+        # getMenuNames
+        session.get(f"{BASE_URL}/getMenuNames", params={
+            "company_id": COMPANY_ID,
+        }, timeout=10)
+        logger.debug("Called getMenuNames")
+
+        # getCustomFieldTitle
+        session.get(f"{BASE_URL}/getCustomFieldTitle", params={
+            "company_id": COMPANY_ID,
+            "from": "R",
+        }, timeout=10)
+        logger.debug("Called getCustomFieldTitle")
+
+    except Exception as e:
+        logger.warning("Error during session initialization: %s", e)
+        # Don't fail if init calls fail, continue anyway
+
+
 def get_todays_appointments() -> List[StudentAppointment]:
     """
     Fetch today's student appointments from MyStudio.
 
     Flow:
-    1. GET getClassScheduledetails for today → list of classes + time slots
-    2. For each time slot, POST getClassdatatabledetails → student roster
-    3. Deduplicate (a student may appear in multiple time slots) by student_id
-    4. Return sorted by start_time
+    1. Authenticate session
+    2. Call initialization endpoints (checkClassScheduleFeatureAvailabilty, getMenuNames, etc.)
+    3. GET getClassScheduledetails for today → list of classes + time slots
+    4. For each time slot, POST getClassdatatabledetails → student roster
+    5. Deduplicate (a student may appear in multiple time slots) by student_id
+    6. Return sorted by start_time
 
     Returns:
         List of StudentAppointment objects sorted by start_time
@@ -39,6 +73,9 @@ def get_todays_appointments() -> List[StudentAppointment]:
     logger.info("Fetching MyStudio schedule for %s", today_str)
 
     session = get_session()
+
+    # Step 0: Initialize session with required endpoints (from browser capture)
+    _initialize_session(session)
 
     # Step 1: Get class schedule (time slots)
     schedule = _get_class_schedule(session, today_str)
@@ -123,24 +160,63 @@ def _get_slot_roster(session, class_appointment_times_id: str, date_str: str) ->
     """
     POST getClassdatatabledetails for a specific time slot.
 
-    Uses DataTables form format (application/x-www-form-urlencoded).
     Returns the list of student records.
+    Sends full DataTables request with all 23 column definitions (from working curl).
     """
     url = f"{BASE_URL}/getClassdatatabledetails"
 
-    # DataTables column definitions (must match what browser sends)
-    data = (
-        "draw=1"
-        "&columns%5B0%5D%5Bdata%5D=&columns%5B0%5D%5Bname%5D=&columns%5B0%5D%5Bsearchable%5D=true&columns%5B0%5D%5Borderable%5D=false&columns%5B0%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B0%5D%5Bsearch%5D%5Bregex%5D=false"
-        "&columns%5B1%5D%5Bdata%5D=show_icon&columns%5B1%5D%5Bname%5D=&columns%5B1%5D%5Bsearchable%5D=true&columns%5B1%5D%5Borderable%5D=false&columns%5B1%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B1%5D%5Bsearch%5D%5Bregex%5D=false"
-        "&columns%5B2%5D%5Bdata%5D=Participant&columns%5B2%5D%5Bname%5D=&columns%5B2%5D%5Bsearchable%5D=true&columns%5B2%5D%5Borderable%5D=true&columns%5B2%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B2%5D%5Bsearch%5D%5Bregex%5D=false"
-        "&columns%5B3%5D%5Bdata%5D=Buyer&columns%5B3%5D%5Bname%5D=&columns%5B3%5D%5Bsearchable%5D=true&columns%5B3%5D%5Borderable%5D=true&columns%5B3%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B3%5D%5Bsearch%5D%5Bregex%5D=false"
-        "&columns%5B4%5D%5Bdata%5D=rank_status&columns%5B4%5D%5Bname%5D=&columns%5B4%5D%5Bsearchable%5D=true&columns%5B4%5D%5Borderable%5D=true&columns%5B4%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B4%5D%5Bsearch%5D%5Bregex%5D=false"
-        "&start=0&length=200&search%5Bvalue%5D=&search%5Bregex%5D=false"
-        f"&company_id={COMPANY_ID}"
-        f"&class_appointment_times_id={class_appointment_times_id}"
-        f"&selected_date={date_str}"
-    )
+    # Full DataTables request matching the working curl command
+    data = {
+        "draw": "1",
+        "company_id": COMPANY_ID,
+        "class_appointment_times_id": class_appointment_times_id,
+        "selected_date": date_str,
+        "start": "0",
+        "length": "81",
+        "search[value]": "",
+        "search[regex]": "false",
+        "order[0][column]": "9",
+        "order[0][dir]": "desc",
+        "from": "",
+        "start_date": "",
+        "end_date": "",
+        "show_participant_pic": "N",
+    }
+
+    # Add all 23 column definitions
+    columns = [
+        ("", False),           # 0
+        ("show_icon", False),  # 1
+        ("Participant", True), # 2
+        ("Buyer", True),       # 3
+        ("rank_status", True), # 4
+        ("att_req", True),     # 5
+        ("membership_end_date", True), # 6
+        ("Email", True),       # 7
+        ("Phone", True),       # 8
+        ("Detail", True),      # 9
+        ("class_attendance_status", False), # 10
+        ("Registration_Date", False),  # 11
+        ("Registration_Method", False), # 12
+        ("First Day in Program", False), # 13
+        ("Ninja Username", False), # 14
+        ("", False),  # 15
+        ("", False),  # 16
+        ("", False),  # 17
+        ("", False),  # 18
+        ("", False),  # 19
+        ("", False),  # 20
+        ("", False),  # 21
+        ("", False),  # 22
+    ]
+
+    for i, (col_name, orderable) in enumerate(columns):
+        data[f"columns[{i}][data]"] = col_name
+        data[f"columns[{i}][name]"] = ""
+        data[f"columns[{i}][searchable]"] = "true"
+        data[f"columns[{i}][orderable]"] = "true" if orderable else "false"
+        data[f"columns[{i}][search][value]"] = ""
+        data[f"columns[{i}][search][regex]"] = "false"
 
     headers = {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -149,10 +225,15 @@ def _get_slot_roster(session, class_appointment_times_id: str, date_str: str) ->
     }
 
     try:
+        logger.debug("Fetching roster for slot %s on %s", class_appointment_times_id, date_str)
         resp = session.post(url, data=data, headers=headers, timeout=30)
+
         resp.raise_for_status()
         result = resp.json()
-        return result.get("data", [])
+        students = result.get("data", [])
+
+        logger.info("Got %d students for slot %s", len(students), class_appointment_times_id)
+        return students
 
     except Exception as e:
         logger.error("Failed to fetch slot roster (slot=%s): %s", class_appointment_times_id, e)
