@@ -32,6 +32,10 @@ from sites.lineleader.schedules import (
     enrich_sessions_with_children,
     reschedule_tour,
 )
+from sites.mystudio.auth import get_bearer_token as get_mystudio_token
+from sites.mystudio.schedules import get_todays_appointments
+from format_tours import format_unified_schedule
+from export_tours import create_unified_excel_file
 
 logger = get_logger(__name__)
 
@@ -207,6 +211,15 @@ When rescheduling, always confirm the details with the user before making change
                     },
                     "required": ["tour_id", "new_datetime"]
                 }
+            },
+            {
+                "name": "get_todays_full_schedule",
+                "description": "Get today's complete schedule including both GBS tours (LineLeader) and student appointments (MyStudio), merged and sorted by time",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
             }
         ]
 
@@ -223,6 +236,8 @@ When rescheduling, always confirm the details with the user before making change
                 return self._handle_get_tour_details(tool_input)
             elif tool_name == "reschedule_tour":
                 return self._handle_reschedule_tour(tool_input)
+            elif tool_name == "get_todays_full_schedule":
+                return self._handle_get_todays_full_schedule()
             else:
                 return f"Unknown tool: {tool_name}"
 
@@ -325,3 +340,35 @@ When rescheduling, always confirm the details with the user before making change
 
         except Exception as e:
             raise RuntimeError(f"Failed to reschedule tour: {e}")
+
+    def _handle_get_todays_full_schedule(self) -> str:
+        """Get today's full schedule (GBS tours + student appointments, merged and sorted)."""
+        try:
+            # Fetch GBS tours from LineLeader
+            ll_token = asyncio.run(get_bearer_token())
+            gbs_sessions = get_todays_sessions(ll_token)
+            enrich_sessions_with_children(ll_token, gbs_sessions)
+
+            # Fetch student appointments from MyStudio
+            ms_token = asyncio.run(get_mystudio_token())
+            # Note: get_todays_appointments is async, but we'll handle it synchronously for now
+            # TODO: Refactor chatbot to fully support async after Milestone 2
+            appointments = []
+            try:
+                # Create a new event loop if needed
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                appointments = loop.run_until_complete(get_todays_appointments())
+            except Exception as e:
+                logger.warning(f"Failed to fetch MyStudio appointments: {e}")
+                appointments = []
+
+            # Format unified schedule
+            formatted = format_unified_schedule(gbs_sessions, appointments)
+
+            result = formatted
+            result += "\n\n📥 **Download as Excel:** [Download this schedule](/api/export/tours)"
+            return result
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch full schedule: {e}")

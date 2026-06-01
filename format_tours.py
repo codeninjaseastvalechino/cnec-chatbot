@@ -1,8 +1,9 @@
 """
-Format GBS tours for display and export.
+Format GBS tours and student appointments for display and export.
 """
 
-from typing import List
+from typing import List, Union
+from datetime import datetime
 
 
 def format_tours_as_bullets(sessions) -> str:
@@ -42,6 +43,80 @@ def format_tours_as_bullets(sessions) -> str:
                 lines.append(f"    👧 {children_text}")
 
             lines.append(f"    🎮 {session.tour_type}")
+
+    return "\n".join(lines)
+
+
+def format_unified_schedule(gbs_sessions, appointments, date=None) -> str:
+    """
+    Format unified schedule (GBS tours + student appointments) as nested bullets.
+
+    Merges both lists, sorts by start_time, and displays with appropriate icons.
+
+    Format:
+    📅 Today's Schedule (May 31, 2026)
+    ├── 10:00 AM | GBS Junior (Journei Ashbourne)
+    │   └── Staff: Venay Bhatia
+    ├── 11:30 AM | Lesson (Emma Johnson)
+    │   └── Instructor: Sarah Smith
+    └── 1:30 PM | GBS (Tyler Chen)
+        └── Staff: Alex Martinez
+
+    Args:
+        gbs_sessions: List of GBSSession objects
+        appointments: List of StudentAppointment objects
+        date: Optional datetime for header (default: today)
+
+    Returns:
+        Formatted string for display
+    """
+    if not gbs_sessions and not appointments:
+        return "No schedule for today."
+
+    if not date:
+        date = datetime.now()
+
+    # Create unified list with (start_time, type, name, detail) tuples
+    items = []
+
+    # Add GBS sessions
+    for session in gbs_sessions:
+        items.append({
+            "time": session.start_time,
+            "type": "GBS" if session.tour_type == "GBS" else "GBS Junior",
+            "name": session.student_name,
+            "instructor": session.assignee_name,
+            "icon": "🎮",
+        })
+
+    # Add appointments
+    for appt in appointments:
+        items.append({
+            "time": appt.start_time,
+            "type": appt.appointment_type,
+            "name": appt.student_name,
+            "instructor": appt.instructor_name,
+            "icon": "📝",
+        })
+
+    # Sort by time
+    items.sort(key=lambda x: x["time"])
+
+    # Format output
+    date_str = date.strftime("%B %d, %Y")  # e.g., "May 31, 2026"
+    lines = [f"📅 Today's Schedule ({date_str})"]
+
+    if not items:
+        lines.append("No appointments scheduled.")
+        return "\n".join(lines)
+
+    for i, item in enumerate(items):
+        time_str = item["time"].strftime("%I:%M %p").lstrip("0")  # Remove leading 0
+        is_last = (i == len(items) - 1)
+        prefix = "└── " if is_last else "├── "
+
+        lines.append(f"{prefix}{time_str} | {item['type']} ({item['name']})")
+        lines.append(f"{'    ' if is_last else '│   '}└── {item['icon']} {item['instructor']}")
 
     return "\n".join(lines)
 
