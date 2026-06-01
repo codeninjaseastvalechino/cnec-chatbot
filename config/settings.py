@@ -42,6 +42,31 @@ class Settings:
         "lineleader_token.json",
     )
 
+    # ── MyStudio (Site 1) ─────────────────────────────────────────────────────
+    MYSTUDIO_LOGIN_URL: str = "https://cn.mystudio.io/login"
+    MYSTUDIO_API_URL: str = "https://cn.mystudio.io/api/v1"  # Placeholder — confirm via DevTools
+
+    # Credentials — loaded from .env
+    MYSTUDIO_USERNAME: str = os.getenv("MYSTUDIO_USERNAME", "")
+    MYSTUDIO_PASSWORD: str = os.getenv("MYSTUDIO_PASSWORD", "")
+
+    # Center-specific IDs (MyStudio)
+    MYSTUDIO_ORG_ID: str = os.getenv("MYSTUDIO_ORG_ID", "")
+    MYSTUDIO_CENTER_ID: str = os.getenv("MYSTUDIO_CENTER_ID", MYSTUDIO_ORG_ID)
+
+    # Token cache
+    MYSTUDIO_TOKEN_FILE: str = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "browser_state",
+        "mystudio_token.json",
+    )
+
+    # ── Gmail IMAP (2FA code extraction) ──────────────────────────────────────
+    GMAIL_ADDRESS: str = os.getenv("GMAIL_ADDRESS", "")
+    GMAIL_APP_PASSWORD: str = os.getenv("GMAIL_APP_PASSWORD", "")
+    GMAIL_2FA_TIMEOUT_SECONDS: int = int(os.getenv("GMAIL_2FA_TIMEOUT_SECONDS", "120"))
+    GMAIL_2FA_POLL_INTERVAL_SECONDS: int = 2
+
     # Browser settings
     BROWSER_HEADLESS: bool = True
     BROWSER_TIMEOUT_MS: int = 30000
