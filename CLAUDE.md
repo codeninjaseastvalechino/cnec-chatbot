@@ -70,11 +70,113 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | Milestone | Status |
 |-----------|--------|
 | 1 — LineLeader login + GBS/JR GBS tour pull + reschedule | ✅ Complete |
-| 2 — MyStudio login + 2FA + full daily schedule | ⬜ Not started |
+| 2 — MyStudio login + 2FA + full daily schedule | 🔄 In Progress |
 | 3 — Student lookup + camp details | ⬜ Not started |
 | 4 — Move / create / cancel appointments | ⬜ Not started |
 | 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started |
+
+### Milestone 2 — What's built so far (2026-06-01)
+
+**Login + schedule fetch working. Student roster per timeslot is next.**
+
+#### Files created/updated:
+- `sites/mystudio/auth.py` — **COMPLETE REWRITE** (cookie-based auth, not bearer tokens)
+- `sites/mystudio/schedules.py` — **COMPLETE REWRITE** (real confirmed endpoints)
+- `sites/mystudio/appointments.py` — Updated with real API fields
+- `config/settings.py` — Fixed MyStudio URLs, added hardcoded company/user IDs
+- `mock_chatbot.py` — Updated StudentAppointment mock to match new fields
+- `chatbot.py` — Updated to call synchronous `get_todays_appointments()`
+- `format_tours.py` — Updated unified schedule formatter for new `parent_name` field
+
+#### Critical architectural discovery:
+**MyStudio uses session-based auth (PHP cookies), NOT bearer tokens.**
+- `c_u_id_9901`, `c_u_id_9901_sessid`, `PHPSESSID` are the session cookies
+- No Authorization header needed — cookies carry the session
+- `remember_me: true` in OTP POST → cookies persist 30 days
+- Cookie cache file: `browser_state/mystudio_cookies.json`
+- Session validity checked via `GET /Api/PortalApi/verifySession`
+
+#### Confirmed MyStudio API endpoints (from Playwright network capture 2026-05-31):
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `POST /Api/PortalApi/login` | POST | Step 1: credentials → triggers OTP email |
+| `POST /Api/PortalApi/login` | POST | Step 2: OTP verification → sets session cookies |
+| `GET /Api/PortalApi/verifySession` | GET | Check if session is still valid |
+| `GET /Api/PortalApi/getClassScheduledetails` | GET | Today's class time slots |
+| `POST /Api/PortalApi/getClassdatatabledetails` | POST | Student roster for a time slot |
+
+**All URLs are at `https://cn.mystudio.io/v43/Api/PortalApi/`**
+
+#### Confirmed IDs (Code Ninjas Eastvale Chino — hardcoded in settings.py):
+- `company_id = "578"`
+- `user_id = "9901"` (the logged-in user ID)
+- login email = `eastvalechinocodeninjas@gmail.com`
+
+#### Login flow (confirmed from real browser capture):
+1. `POST /login` with `{"email": "...", "password": BASE64("actual_password"), "from": "login_form"}`
+2. Server responds `{"status": "Success", "msg": "One time passcode has been send to..."}` and sends OTP email
+3. `POST /login` with `{"otpCode": BASE64("6_digit_code"), "from": "otp_form", "remember_me": true, ...}`
+4. Server responds with full company/user JSON + sets session cookies
+5. All subsequent API calls use those cookies — no Authorization header
+
+#### Schedule fetch flow:
+1. `GET getClassScheduledetails?company_id=578&selected_date=2026-06-01&class_scheduler_verion=2&view_roster_flag=N`
+   - Returns list of class types (e.g., "CREATE (CODING)", "JR") with time slots
+   - Each slot has: `class_appointment_times_id`, `start_time`, `reg_count_time`, `capacity_value`
+2. For each slot with `reg_count_time > 0`: `POST getClassdatatabledetails` (form-encoded, DataTables format)
+   - Returns student records with: `Participant` (student name), `Buyer` (parent name), `Phone`, `rank_status`, `end_time`, `class_reg_id`
+
+#### StudentAppointment fields (from real API):
+| Field | Source |
+|-------|--------|
+| `id` | `class_reg_id` |
+| `student_name` | `Participant` |
+| `student_id` | `student_id` |
+| `parent_name` | `Buyer` |
+| `phone` | `Phone` |
+| `rank` | `rank_status` (e.g., "White Belt") |
+| `appointment_type` | class title from schedule (e.g., "CREATE (CODING)", "JR") |
+| `start_time` | from slot `start_time` field |
+| `end_time` | from `end_time` in student record (e.g., "2026-06-01 16:00:00") |
+
+#### What's confirmed working (2026-06-01):
+- ✅ Direct API login (no Playwright needed) — `mystudio_login_api.py`
+- ✅ OTP 2FA flow — credentials POST triggers email, OTP submitted with `remember_me: true`
+- ✅ Session cookie caching — `browser_state/mystudio_cookies.json`
+- ✅ Auto-login on second run — `verifySession` confirms session, skips OTP entirely
+- ✅ `getClassScheduledetails` — returns class types + time slots with counts
+- ✅ Live data confirmed: CREATE (CODING), JR, SCRATCH PLUS classes with correct slot counts
+
+#### ⬜ TODO NEXT — Extract student details per timeslot:
+`getClassdatatabledetails` is being called but returning 0 students (schedule shows slots correctly but roster is empty).
+
+**Steps to debug:**
+1. Print the raw response from `getClassdatatabledetails` for one slot to see what's coming back
+2. The request uses `application/x-www-form-urlencoded` with `X-Requested-With: XMLHttpRequest` — check if any of these headers are missing or wrong
+3. Compare request exactly against the working Playwright capture (body format in `test_mystudio_api.py` vs what `mystudio_login_api.py` sends)
+4. Once working, wire it into `sites/mystudio/schedules.py` so `get_todays_appointments()` returns real data
+
+**Quick debug — add this to `mystudio_login_api.py` get_schedule() after the students POST:**
+```python
+print(f"       RAW: {students.status_code} | {students.text[:300]}")
+```
+
+#### Auth details confirmed:
+- Login email: `eastvalechinocodeninjas@gmail.com` (set in `.env` as `MYSTUDIO_USERNAME`)
+- Password encoding: `base64(urllib.parse.quote(password, safe=''))` — the `safe=''` is critical (encodes `@` as `%40`)
+- OTP encoding: same `base64(urllib.parse.quote(otp, safe=''))` 
+- Gmail App Password: NOT available (Google Workspace corp account — app passwords disabled by admin)
+- OTP flow: manual entry in terminal (user checks email, types 6-digit code)
+- Cookie file: `browser_state/mystudio_cookies.json`
+- Session cookies: `PHPSESSID`, `c_u_id_9901_sessid`, `ms_trace_id`, `ms_u_em`
+- Note: `c_u_id_9901` cookie not appearing in direct API login (only in browser flow) — session still works via `verifySession`
+
+#### Known issue to watch for:
+The `getClassdatatabledetails` POST previously returned 500 errors when called from Python requests directly (before Playwright session extraction). The fix is the Playwright-extracted cookies. If it still 500s, check:
+- Are all cookies being set? Print `session.cookies.get_dict()` after `get_session()`
+- Is `X-Requested-With: XMLHttpRequest` header present? (Required for this endpoint)
+- Is Content-Type `application/x-www-form-urlencoded`? (Not JSON)
 
 ### Milestone 1 — What's built
 - `get_todays_sessions()` — fetches today's Tours via action-items API, filters `display_type == "Tour"`
@@ -1203,12 +1305,14 @@ def mock_lineleader_api(monkeypatch):
 
 | # | Question | Status |
 |---|----------|--------|
-| 1 | MyStudio API endpoints | 🔄 Needs live site inspection (Milestone 2) |
-| 2 | Does MyStudio rate-limit Playwright? | 🔄 Test early |
+| 1 | MyStudio API endpoints | ✅ Confirmed — see Milestone 2 section above |
+| 2 | Does MyStudio rate-limit Playwright? | 🔄 Not yet tested — watch for 429 on repeated logins |
 | 3 | Homebase API write endpoints for schedule publishing | ✅ Confirmed working |
 | 4 | LineLeader write endpoint for rescheduling Tours | ✅ Confirmed — `PUT /api/v3/tasks/{item_id}` |
 | 5 | Child name lookup from family record | ✅ Confirmed — `GET /families/{id}` → `children[]` |
 | 6 | GBS vs JR GBS distinction | ✅ Confirmed — description field + `custom_values JUNIOR` fallback |
+| 7 | Gmail App Password for 2FA extraction | ❌ Not available — Google Workspace corp account. Using manual OTP prompt instead. |
+| 8 | Does `remember_me: true` actually persist cookies 30 days? | 🔄 Test — cache to `browser_state/mystudio_cookies.json` |
 
 ---
 

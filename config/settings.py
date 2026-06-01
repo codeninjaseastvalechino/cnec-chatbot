@@ -43,22 +43,22 @@ class Settings:
     )
 
     # ── MyStudio (Site 1) ─────────────────────────────────────────────────────
-    MYSTUDIO_LOGIN_URL: str = "https://cn.mystudio.io/login"
-    MYSTUDIO_API_URL: str = "https://cn.mystudio.io/api/v1"  # Placeholder — confirm via DevTools
+    MYSTUDIO_PORTAL_URL: str = "https://cn.mystudio.io/v43/WebPortal/"
+    MYSTUDIO_API_URL: str = "https://cn.mystudio.io/v43/Api/PortalApi"
 
     # Credentials — loaded from .env
     MYSTUDIO_USERNAME: str = os.getenv("MYSTUDIO_USERNAME", "")
     MYSTUDIO_PASSWORD: str = os.getenv("MYSTUDIO_PASSWORD", "")
 
-    # Center-specific IDs (MyStudio)
-    MYSTUDIO_ORG_ID: str = os.getenv("MYSTUDIO_ORG_ID", "")
-    MYSTUDIO_CENTER_ID: str = os.getenv("MYSTUDIO_CENTER_ID", MYSTUDIO_ORG_ID)
+    # Center-specific IDs (Code Ninjas Eastvale Chino — confirmed from live site)
+    MYSTUDIO_COMPANY_ID: str = "578"
+    MYSTUDIO_USER_ID: str = "9901"
 
-    # Token cache
-    MYSTUDIO_TOKEN_FILE: str = os.path.join(
+    # Cookie cache (session-based auth, not bearer token)
+    MYSTUDIO_COOKIE_FILE: str = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
         "browser_state",
-        "mystudio_token.json",
+        "mystudio_cookies.json",
     )
 
     # ── Gmail IMAP (2FA code extraction) ──────────────────────────────────────

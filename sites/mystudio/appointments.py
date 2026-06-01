@@ -2,34 +2,38 @@
 sites/mystudio/appointments.py
 ==============================
 Data models for MyStudio student appointments.
+
+Fields confirmed from live API (getClassdatatabledetails response 2026-05-31):
+  Participant, Buyer, Phone, rank_status, class_reg_id, student_id,
+  reschedule_Date, end_time, Detail (class category)
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 from datetime import datetime
 
 
 @dataclass
 class StudentAppointment:
-    """Represents a student appointment in MyStudio."""
+    """Represents a student appointment slot in MyStudio."""
 
-    id: str
-    student_name: str
-    student_id: str
-    appointment_type: str
-    start_time: datetime
-    end_time: datetime
-    duration_minutes: int
-    instructor_name: str
-    location: str
+    id: str                      # class_reg_id
+    student_name: str            # Participant field
+    student_id: str              # student_id field
+    parent_name: str             # Buyer field
+    phone: str                   # Phone field
+    rank: str                    # rank_status (e.g., "White Belt")
+    appointment_type: str        # class title (e.g., "CREATE (CODING)", "JR")
+    start_time: datetime         # from slot start_time
+    end_time: datetime           # from end_time field in response
+    duration_minutes: int        # computed from start/end
+    instructor_name: str = ""    # not in API response — placeholder
+    location: str = ""           # not in API response — placeholder
     notes: Optional[str] = None
 
-    @property
-    def start_time_local(self) -> datetime:
-        """Convert UTC to local timezone (for display)."""
-        # TODO: Implement timezone conversion based on center location
-        # For now, return as-is. Will add pytz or tzlocal when testing with real data.
-        return self.start_time
+    def time_display(self) -> str:
+        """Format start time as '3:00 PM'."""
+        return self.start_time.strftime("%I:%M %p").lstrip("0")
 
     def __str__(self) -> str:
-        return f"{self.start_time.strftime('%I:%M %p')} | {self.appointment_type} ({self.student_name})"
+        return f"{self.time_display()} | {self.appointment_type} ({self.student_name})"
