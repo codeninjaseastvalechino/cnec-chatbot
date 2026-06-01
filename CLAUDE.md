@@ -65,20 +65,32 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ## Current Status
 
-**Active milestone: Milestone 3 — Integrate MyStudio into chat UI**
+**Active milestone: Milestone 2 — Full Daily Schedule (finishing)**
 
 | Milestone | Status |
 |-----------|--------|
 | 1 — LineLeader login + GBS/JR GBS tour pull + reschedule | ✅ Complete |
-| 2 — MyStudio login + 2FA + full daily schedule | ✅ Complete (2026-06-01) |
-| 3 — Integrate MyStudio into chat UI + mock chatbot | 🔄 In Progress |
+| 2 — MyStudio login + unified schedule + chat/Excel output | 🔄 In Progress |
+| 3 — Student lookup + camp details | ⬜ Not started |
 | 4 — Move / create / cancel appointments | ⬜ Not started |
 | 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started |
 
-### Milestone 2 — COMPLETE (2026-06-01)
+### Milestone 2 — In Progress (2026-06-01)
 
-**Full MyStudio integration: login + 2FA + schedule + student roster all working.**
+**APIs working. Still need: merge LineLeader + MyStudio into unified schedule, wire into chat UI + Excel, update mock chatbot.**
+
+#### Done:
+- ✅ MyStudio login + OTP 2FA (direct API, no Playwright)
+- ✅ 30-day cookie caching
+- ✅ `getClassScheduledetails` — time slots
+- ✅ `getClassdatatabledetails` — student roster (full 23-column DataTables request required)
+
+#### Remaining:
+- ⬜ Merge LineLeader tours + MyStudio appointments into unified time-ordered schedule
+- ⬜ Wire MyStudio into chat UI (`chatbot.py`, `app.py`)
+- ⬜ Update Excel export to include MyStudio appointments
+- ⬜ Update `mock_chatbot.py` with MyStudio mock data
 
 #### Files created/updated:
 - `sites/mystudio/auth.py` — **COMPLETE REWRITE** (cookie-based auth, not bearer tokens)
