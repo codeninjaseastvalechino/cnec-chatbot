@@ -37,8 +37,12 @@ class MockChatbotEngine:
         # Route to mock handlers based on message content
         message_lower = user_message.lower()
 
+        # Check for full schedule (GBS + appointments)
+        if (("full schedule" in message_lower or "complete schedule" in message_lower or "all appointments" in message_lower) and
+            "today" in message_lower):
+            response = self._mock_todays_full_schedule()
         # Check for today's schedule (various phrasings)
-        if (("tour" in message_lower or "schedule" in message_lower or "calendar" in message_lower) and
+        elif (("tour" in message_lower or "schedule" in message_lower or "calendar" in message_lower) and
             ("today" in message_lower or "scheduled" in message_lower)):
             response = self._mock_todays_tours()
         # Check for tour details
@@ -80,6 +84,54 @@ class MockChatbotEngine:
 **Summary:** {len(sessions)} tours total ({gbs_count} GBS, {jrgbs_count} JR GBS)
 
 📥 **Download as Excel:** You can [download this schedule as Excel](/api/export/tours) to print or share on WhatsApp. 😊"""
+
+    def _mock_todays_full_schedule(self) -> str:
+        """Mock response for 'what's my full schedule today?' (GBS + appointments merged)"""
+        from datetime import datetime
+        from format_tours import get_sample_sessions, format_unified_schedule
+        from sites.mystudio.appointments import StudentAppointment
+
+        # Get mock GBS sessions
+        gbs_sessions = get_sample_sessions()
+
+        # Create mock student appointments (MyStudio)
+        today = datetime.now()
+        appointments = [
+            StudentAppointment(
+                id="appt_001",
+                student_name="Emma Johnson",
+                student_id="std_101",
+                appointment_type="Lesson",
+                start_time=today.replace(hour=11, minute=30, second=0, microsecond=0),
+                end_time=today.replace(hour=12, minute=0, second=0, microsecond=0),
+                duration_minutes=30,
+                instructor_name="Sarah Smith",
+                location="Studio Room A",
+                notes="Beginner coding lesson"
+            ),
+            StudentAppointment(
+                id="appt_002",
+                student_name="Tyler Chen",
+                student_id="std_102",
+                appointment_type="Party Prep",
+                start_time=today.replace(hour=14, minute=0, second=0, microsecond=0),
+                end_time=today.replace(hour=15, minute=30, second=0, microsecond=0),
+                duration_minutes=90,
+                instructor_name="Alex Martinez",
+                location="Party Room",
+                notes="Birthday party setup"
+            ),
+        ]
+
+        # Format unified schedule
+        formatted = format_unified_schedule(gbs_sessions, appointments)
+        total_items = len(gbs_sessions) + len(appointments)
+
+        return f"""{formatted}
+
+**Summary:** {total_items} items total ({len(gbs_sessions)} GBS tours, {len(appointments)} student appointments)
+
+📥 **Download as Excel:** You can [download this schedule as Excel](/api/export/tours) to print or share. 😊"""
 
     def _mock_tour_details(self) -> str:
         """Mock response for 'tell me about tour...'"""
@@ -132,9 +184,10 @@ All tours are on schedule! Is there anything else you need? 📊"""
 
     def _mock_generic(self) -> str:
         """Generic mock response for unrecognized queries."""
-        return """I can help you with GBS tours! Here are some things you can ask:
+        return """I can help you with GBS tours and student appointments! Here are some things you can ask:
 
-✅ **"What tours are scheduled today?"** — See today's schedule
+✅ **"What's my full schedule today?"** — See GBS tours + appointments (Milestone 2)
+✅ **"What tours are scheduled today?"** — See just the GBS tours
 ✅ **"Tell me about tour #1995970"** — Get details about a specific tour
 ✅ **"Reschedule tour #1995970 to 11:00 AM tomorrow"** — Reschedule a tour
 ✅ **"Are there any JR GBS tours?"** — Filter by tour type
