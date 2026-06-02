@@ -157,42 +157,35 @@ class ChatbotEngine:
 
     def _get_system_prompt(self) -> str:
         """System prompt for the chatbot."""
-        return """You are a helpful assistant for Code Ninjas Eastvale Chino.
+        return """You are an operations assistant for Code Ninjas Eastvale Chino.
+You help staff manage daily schedules, student appointments, and tours
+by querying the center's systems and taking action on their behalf.
 
-You manage TWO types of data:
-1. GBS Tours (from LineLeader) — prospective family tours
-2. Student Appointments (from MyStudio) — enrolled students coming for classes (CREATE CODING, SCRATCH PLUS, JR, etc.)
+You have access to tools that connect to LineLeader (tours) and MyStudio
+(student classes). Use whichever tools are appropriate to fully answer
+the user's question — you may call multiple tools if needed.
 
-IMPORTANT TOOL SELECTION RULES:
-- If the user asks for "schedule", "today's schedule", "full schedule", "what's happening today", or anything about students/classes/appointments → use get_todays_full_schedule
-- Only use get_todays_gbs_tours if the user specifically asks about "tours" or "GBS tours" only
-- When in doubt, use get_todays_full_schedule — it includes everything
+SAFETY RULES — non-negotiable:
+- Never reschedule, cancel, or modify anything without first showing the
+  user exactly what you're about to do and receiving explicit confirmation.
+- If a request is ambiguous (e.g. two students with the same name),
+  stop and ask before taking any action.
+- If a tool returns an error or unexpected data, report it — do not guess
+  or proceed.
 
-When displaying schedules, use this nested bullet format:
-📅 Date
-  ⏰ Time
-    👨‍👩‍👧 Parent Name
-    👧 Child Name (Age)
-    🎮 Tour Type (GBS or JR GBS)
-
-For student appointments use:
-  ⏰ Time
-    👤 Student Name (Belt/Rank)
-    👪 Parent: Parent Name
-    💻 Class Type
-
-Be friendly and helpful. ALWAYS include this at the end of every schedule display:
-
-📥 **Download as Excel:** [Download this schedule](/api/export/tours)
-
-When rescheduling, always confirm the details with the user before making changes."""
+Be concise and friendly. Staff are busy — get to the point."""
 
     def _get_tools(self) -> list:
         """Define tools for Claude to use."""
         return [
             {
                 "name": "get_todays_gbs_tours",
-                "description": "Get ONLY the GBS tours (prospective family tours) from LineLeader. Use this only when the user specifically asks about tours or GBS tours. For general schedule questions, use get_todays_full_schedule instead.",
+                "description": (
+                    "Fetches today's GBS tour appointments from LineLeader. "
+                    "These are visits by prospective families who have not enrolled yet — "
+                    "not current students. Returns guardian name, child name and age, "
+                    "tour type (GBS or JR GBS), scheduled time, and assigned staff member."
+                ),
                 "input_schema": {
                     "type": "object",
                     "properties": {},
@@ -233,7 +226,14 @@ When rescheduling, always confirm the details with the user before making change
             },
             {
                 "name": "get_todays_full_schedule",
-                "description": "Get today's COMPLETE schedule — both GBS tours (LineLeader) AND student class appointments (MyStudio: CREATE CODING, SCRATCH PLUS, JR, etc.), merged and sorted by time. Use this for any general question about today's schedule, students, or classes.",
+                "description": (
+                    "Fetches today's complete schedule: both GBS tours from LineLeader "
+                    "AND enrolled student class sessions from MyStudio (CREATE CODING, "
+                    "SCRATCH PLUS, JR, etc.), merged in chronological order. Use this "
+                    "whenever the user asks about today's schedule, what's happening "
+                    "today, students coming in, or anything that is not specifically "
+                    "limited to prospective family tours only."
+                ),
                 "input_schema": {
                     "type": "object",
                     "properties": {},
