@@ -141,14 +141,14 @@ async def create_unified_excel_file(gbs_sessions, appointments, filename=None):
     items = []
 
     for session in gbs_sessions:
+        # For GBS: student = child name with age, parent = guardian name
+        child_names = ", ".join(session.child_display) if session.child_display else ""
         items.append({
             "time": session.start_time,
-            "student": session.student_name,
+            "student": child_names,
             "type": session.tour_type,
-            "duration": 30,  # GBS tours are typically 30 min
-            "instructor": session.assignee_name,
-            "location": session.location_name,
-            "notes": f"Children: {', '.join(session.child_display)}" if session.child_display else None,
+            "belt": "",
+            "parent": session.student_name,  # guardian
         })
 
     for appt in appointments:
@@ -156,14 +156,12 @@ async def create_unified_excel_file(gbs_sessions, appointments, filename=None):
             "time": appt.start_time,
             "student": appt.student_name,
             "type": appt.appointment_type,
-            "duration": appt.duration_minutes,
-            "instructor": appt.instructor_name,
-            "location": appt.location,
-            "notes": appt.notes,
+            "belt": appt.rank,
+            "parent": getattr(appt, "parent_name", "") or "",
         })
 
-    # Sort by time
-    items.sort(key=lambda x: x["time"])
+    # Sort by time — strip timezone info so naive and aware datetimes can be compared
+    items.sort(key=lambda x: x["time"].astimezone().replace(tzinfo=None) if x["time"].tzinfo else x["time"])
 
     # Create workbook
     wb = Workbook()
@@ -182,17 +180,15 @@ async def create_unified_excel_file(gbs_sessions, appointments, filename=None):
         bottom=Side(style='thin')
     )
 
-    # Set column widths
+    # Set column widths: Time | Student | Type | Belt | Parent
     ws.column_dimensions['A'].width = 12  # Time
-    ws.column_dimensions['B'].width = 20  # Student
-    ws.column_dimensions['C'].width = 15  # Type
-    ws.column_dimensions['D'].width = 10  # Duration
-    ws.column_dimensions['E'].width = 20  # Instructor/Staff
-    ws.column_dimensions['F'].width = 18  # Location
-    ws.column_dimensions['G'].width = 30  # Notes
+    ws.column_dimensions['B'].width = 22  # Student
+    ws.column_dimensions['C'].width = 18  # Type
+    ws.column_dimensions['D'].width = 15  # Belt
+    ws.column_dimensions['E'].width = 22  # Parent
 
     # Add headers
-    headers = ['Time', 'Student', 'Type', 'Duration (min)', 'Instructor/Staff', 'Location', 'Notes']
+    headers = ['Time', 'Student', 'Type', 'Belt', 'Parent']
     for col_num, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_num)
         cell.value = header
@@ -203,44 +199,32 @@ async def create_unified_excel_file(gbs_sessions, appointments, filename=None):
 
     # Add data rows
     for row_num, item in enumerate(items, 2):
+        t = item["time"]
+        if t.tzinfo is not None:
+            t = t.astimezone()  # Convert UTC → local for GBS sessions
+
         # Time
-        time_cell = ws.cell(row=row_num, column=1)
-        time_cell.value = item["time"].strftime("%I:%M %p").lstrip("0")
-        time_cell.border = border
-        time_cell.alignment = Alignment(horizontal="center")
+        ws.cell(row=row_num, column=1).value = t.strftime("%I:%M %p").lstrip("0")
+        ws.cell(row=row_num, column=1).border = border
+        ws.cell(row=row_num, column=1).alignment = Alignment(horizontal="center")
 
         # Student
-        student_cell = ws.cell(row=row_num, column=2)
-        student_cell.value = item["student"]
-        student_cell.border = border
+        ws.cell(row=row_num, column=2).value = item["student"]
+        ws.cell(row=row_num, column=2).border = border
 
         # Type
-        type_cell = ws.cell(row=row_num, column=3)
-        type_cell.value = item["type"]
-        type_cell.border = border
-        type_cell.alignment = Alignment(horizontal="center")
+        ws.cell(row=row_num, column=3).value = item["type"]
+        ws.cell(row=row_num, column=3).border = border
+        ws.cell(row=row_num, column=3).alignment = Alignment(horizontal="center")
 
-        # Duration
-        duration_cell = ws.cell(row=row_num, column=4)
-        duration_cell.value = item["duration"]
-        duration_cell.border = border
-        duration_cell.alignment = Alignment(horizontal="center")
+        # Belt
+        ws.cell(row=row_num, column=4).value = item["belt"]
+        ws.cell(row=row_num, column=4).border = border
+        ws.cell(row=row_num, column=4).alignment = Alignment(horizontal="center")
 
-        # Instructor/Staff
-        instructor_cell = ws.cell(row=row_num, column=5)
-        instructor_cell.value = item["instructor"]
-        instructor_cell.border = border
-
-        # Location
-        location_cell = ws.cell(row=row_num, column=6)
-        location_cell.value = item["location"]
-        location_cell.border = border
-
-        # Notes
-        notes_cell = ws.cell(row=row_num, column=7)
-        notes_cell.value = item["notes"]
-        notes_cell.border = border
-        notes_cell.alignment = Alignment(wrap_text=True)
+        # Parent
+        ws.cell(row=row_num, column=5).value = item["parent"]
+        ws.cell(row=row_num, column=5).border = border
 
     # Set row height for header
     ws.row_dimensions[1].height = 25

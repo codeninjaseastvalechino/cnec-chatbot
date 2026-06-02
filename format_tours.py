@@ -81,26 +81,28 @@ def format_unified_schedule(gbs_sessions, appointments, date=None) -> str:
 
     # Add GBS sessions
     for session in gbs_sessions:
+        children_str = ", ".join(session.child_display) if session.child_display else "children TBD"
         items.append({
             "time": session.start_time,
-            "type": "GBS" if session.tour_type == "GBS" else "GBS Junior",
-            "name": session.student_name,
-            "instructor": session.assignee_name,
-            "icon": "🎮",
+            "type": session.tour_type,
+            "name": f"Parent: {session.student_name} | Child: {children_str}",
+            "instructor": f"Staff: {session.assignee_name}",
+            "icon": "🎯",
         })
 
     # Add appointments
     for appt in appointments:
+        parent = getattr(appt, "parent_name", "") or appt.instructor_name
         items.append({
             "time": appt.start_time,
             "type": appt.appointment_type,
-            "name": appt.student_name,
-            "instructor": getattr(appt, "parent_name", appt.instructor_name) or appt.instructor_name,
-            "icon": "📝",
+            "name": f"Student: {appt.student_name} ({appt.rank}) | Parent: {parent}",
+            "instructor": f"Phone: {appt.phone}" if appt.phone else "",
+            "icon": "💻",
         })
 
-    # Sort by time
-    items.sort(key=lambda x: x["time"])
+    # Sort by time — strip timezone info so naive and aware datetimes can be compared
+    items.sort(key=lambda x: x["time"].astimezone().replace(tzinfo=None) if x["time"].tzinfo else x["time"])
 
     # Format output
     date_str = date.strftime("%B %d, %Y")  # e.g., "May 31, 2026"
@@ -111,7 +113,10 @@ def format_unified_schedule(gbs_sessions, appointments, date=None) -> str:
         return "\n".join(lines)
 
     for i, item in enumerate(items):
-        time_str = item["time"].strftime("%I:%M %p").lstrip("0")  # Remove leading 0
+        t = item["time"]
+        if t.tzinfo is not None:
+            t = t.astimezone()  # Convert UTC → local time for GBS sessions
+        time_str = t.strftime("%I:%M %p").lstrip("0")
         is_last = (i == len(items) - 1)
         prefix = "└── " if is_last else "├── "
 

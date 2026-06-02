@@ -20,7 +20,7 @@ class MockChatbotEngine:
         self.conversation_history = []
         self.call_count = 0
 
-    def chat(self, user_message: str) -> str:
+    def chat(self, user_message: str, status_callback=None) -> str:
         """
         Simulate a chat response with realistic tour data.
         Includes a slight delay to simulate API processing.
@@ -31,7 +31,10 @@ class MockChatbotEngine:
             "content": user_message
         })
 
-        # Simulate API latency (Claude thinking)
+        # Simulate API latency and emit status
+        time.sleep(0.3)
+        if status_callback:
+            status_callback("Fetching schedule from LineLeader and MyStudio...")
         time.sleep(0.5)
 
         # Route to mock handlers based on message content
@@ -94,42 +97,42 @@ class MockChatbotEngine:
         # Get mock GBS sessions
         gbs_sessions = get_sample_sessions()
 
-        # Create mock student appointments (MyStudio)
+        # Create mock student appointments matching real MyStudio data shape
         today = datetime.now()
+        def appt(id, student, parent, phone, rank, type, hour, minute):
+            return StudentAppointment(
+                id=id,
+                student_name=student,
+                student_id="",
+                parent_name=parent,
+                phone=phone,
+                rank=rank,
+                appointment_type=type,
+                start_time=today.replace(hour=hour, minute=minute, second=0, microsecond=0),
+                end_time=today.replace(hour=hour+1, minute=minute, second=0, microsecond=0),
+                duration_minutes=60,
+                instructor_name="",
+                location="",
+                notes=None,
+            )
+
         appointments = [
-            StudentAppointment(
-                id="appt_001",
-                student_name="Emma Johnson",
-                student_id="std_101",
-                parent_name="Sarah Johnson",
-                phone="909-555-0101",
-                rank="White Belt",
-                appointment_type="CREATE (CODING)",
-                start_time=today.replace(hour=15, minute=0, second=0, microsecond=0),
-                end_time=today.replace(hour=15, minute=30, second=0, microsecond=0),
-                duration_minutes=30,
-                instructor_name="",
-                location="",
-                notes=None,
-            ),
-            StudentAppointment(
-                id="appt_002",
-                student_name="Tyler Chen",
-                student_id="std_102",
-                parent_name="Maggie Chen",
-                phone="909-555-0202",
-                rank="Yellow Belt",
-                appointment_type="JR",
-                start_time=today.replace(hour=17, minute=0, second=0, microsecond=0),
-                end_time=today.replace(hour=17, minute=30, second=0, microsecond=0),
-                duration_minutes=30,
-                instructor_name="",
-                location="",
-                notes=None,
-            ),
+            # 3:00 PM CREATE (CODING)
+            appt("001", "Khai Collins",    "Orlando Collins",  "909-555-0101", "White Belt",  "CREATE (CODING)", 15, 0),
+            appt("002", "Levi Otubuah",    "Edmund Otubuah",   "909-555-0102", "White Belt",  "CREATE (CODING)", 15, 0),
+            appt("003", "Lucia Zamarripa", "Karla Zamarripa",  "909-555-0103", "Yellow Belt", "CREATE (CODING)", 15, 0),
+            # 3:00 PM SCRATCH PLUS
+            appt("004", "Musa Khan",       "Rabab Khan",       "909-555-0104", "ScratchJR",   "SCRATCH PLUS",    15, 0),
+            appt("005", "Jacob Niu",       "Meng Niu",         "909-555-0105", "ScratchJR",   "SCRATCH PLUS",    15, 0),
+            # 4:00 PM CREATE (CODING)
+            appt("006", "Aiden Park",      "Ji-Yeon Park",     "909-555-0106", "Orange Belt", "CREATE (CODING)", 16, 0),
+            appt("007", "Sofia Rivera",    "Maria Rivera",     "909-555-0107", "Green Belt",  "CREATE (CODING)", 16, 0),
+            # 5:00 PM JR
+            appt("008", "Noah Williams",   "Lisa Williams",    "909-555-0108", "White Belt",  "JR",              17, 0),
+            appt("009", "Zoe Martinez",    "Ana Martinez",     "909-555-0109", "White Belt",  "JR",              17, 0),
+            appt("010", "Ethan Brown",     "Karen Brown",      "909-555-0110", "Yellow Belt", "JR",              17, 0),
         ]
 
-        # Format unified schedule
         formatted = format_unified_schedule(gbs_sessions, appointments)
         total_items = len(gbs_sessions) + len(appointments)
 

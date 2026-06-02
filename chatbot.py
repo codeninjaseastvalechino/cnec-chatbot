@@ -52,15 +52,19 @@ class ChatbotEngine:
         self.conversation_history = []
         self.bearer_token = None
 
-    def chat(self, user_message: str) -> str:
+    # Friendly status messages shown to user while tools run
+    _TOOL_STATUS = {
+        "get_todays_gbs_tours":      "Fetching GBS tours from LineLeader...",
+        "get_tour_details":          "Looking up tour details...",
+        "reschedule_tour":           "Rescheduling tour...",
+        "get_todays_full_schedule":  "Fetching schedule from LineLeader and MyStudio...",
+    }
+
+    def chat(self, user_message: str, status_callback=None) -> str:
         """
         Send a message to the LLM and handle tool calls.
 
-        Implements the agentic loop:
-        1. Add user message to history
-        2. Call LLM with tools
-        3. If LLM calls a tool, execute it and return the result
-        4. Repeat until LLM stops calling tools and returns a response
+        status_callback: optional callable(str) called with status updates during tool execution.
         """
         self.conversation_history.append({
             "role": "user",
@@ -82,6 +86,11 @@ class ChatbotEngine:
                 tool_name = tool_content["name"]
                 tool_input = tool_content["input"]
                 tool_id = tool_content["id"]
+
+                # Notify user what we're doing
+                if status_callback:
+                    status_msg = self._TOOL_STATUS.get(tool_name, f"Running {tool_name}...")
+                    status_callback(status_msg)
 
                 # Execute the tool
                 tool_result = self._execute_tool(tool_name, tool_input)
@@ -146,20 +155,29 @@ class ChatbotEngine:
 
     def _get_system_prompt(self) -> str:
         """System prompt for the chatbot."""
-        return """You are a helpful assistant for Code Ninjas Eastvale Chino's GBS (Game Building Session) scheduling system.
+        return """You are a helpful assistant for Code Ninjas Eastvale Chino.
 
-You can:
-- View today's scheduled GBS tours
-- View details about specific tours
-- Reschedule tours to a new time
-- Export schedules as Excel files
+You manage TWO types of data:
+1. GBS Tours (from LineLeader) — prospective family tours
+2. Student Appointments (from MyStudio) — enrolled students coming for classes (CREATE CODING, SCRATCH PLUS, JR, etc.)
 
-When displaying schedules, use this nested bullet format for clarity:
+IMPORTANT TOOL SELECTION RULES:
+- If the user asks for "schedule", "today's schedule", "full schedule", "what's happening today", or anything about students/classes/appointments → use get_todays_full_schedule
+- Only use get_todays_gbs_tours if the user specifically asks about "tours" or "GBS tours" only
+- When in doubt, use get_todays_full_schedule — it includes everything
+
+When displaying schedules, use this nested bullet format:
 📅 Date
   ⏰ Time
     👨‍👩‍👧 Parent Name
-    👧 Child Name (Age), Child Name (Age)
+    👧 Child Name (Age)
     🎮 Tour Type (GBS or JR GBS)
+
+For student appointments use:
+  ⏰ Time
+    👤 Student Name (Belt/Rank)
+    👪 Parent: Parent Name
+    💻 Class Type
 
 Be friendly and helpful. ALWAYS include this at the end of every schedule display:
 
@@ -172,7 +190,7 @@ When rescheduling, always confirm the details with the user before making change
         return [
             {
                 "name": "get_todays_gbs_tours",
-                "description": "Get all GBS tours scheduled for today, including student names, times, and tour types",
+                "description": "Get ONLY the GBS tours (prospective family tours) from LineLeader. Use this only when the user specifically asks about tours or GBS tours. For general schedule questions, use get_todays_full_schedule instead.",
                 "input_schema": {
                     "type": "object",
                     "properties": {},
@@ -213,7 +231,7 @@ When rescheduling, always confirm the details with the user before making change
             },
             {
                 "name": "get_todays_full_schedule",
-                "description": "Get today's complete schedule including both GBS tours (LineLeader) and student appointments (MyStudio), merged and sorted by time",
+                "description": "Get today's COMPLETE schedule — both GBS tours (LineLeader) AND student class appointments (MyStudio: CREATE CODING, SCRATCH PLUS, JR, etc.), merged and sorted by time. Use this for any general question about today's schedule, students, or classes.",
                 "input_schema": {
                     "type": "object",
                     "properties": {},
@@ -355,6 +373,10 @@ When rescheduling, always confirm the details with the user before making change
             except Exception as e:
                 logger.warning("Failed to fetch MyStudio appointments: %s", e)
                 appointments = []
+
+            # Cache for Excel export (avoids double API calls)
+            self._last_gbs_sessions = gbs_sessions
+            self._last_appointments = appointments
 
             # Format unified schedule
             formatted = format_unified_schedule(gbs_sessions, appointments)

@@ -31,7 +31,8 @@ class Settings:
     LINELEADER_PASSWORD: str = os.getenv("LINELEADER_PASSWORD", "")
 
     # Center-specific IDs (Code Ninjas Eastvale Chino)
-    LINELEADER_ORG_ID: str = "101178"
+    LINELEADER_ORG_ID: str = "101178"       # parent org
+    LINELEADER_CENTER_ORG_ID: str = "101179" # center-level org (used for calendar API)
     LINELEADER_CENTER_ID: str = "102025"
     LINELEADER_STAFF_ID: str = "58347"
 

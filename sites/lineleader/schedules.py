@@ -85,19 +85,61 @@ def get_todays_sessions(bearer_token: str) -> List[GBSSession]:
     """
     Fetch all GBS Tours scheduled for today from the ChildCareCRM API.
 
+    Uses the /tasks endpoint (same as calendar view) which returns all tours
+    regardless of show_on_calendar flag, unlike action-items which excludes some.
+
     Returns:
         List of GBSSession objects sorted by start time.
     """
     today = date.today()
     logger.info("Fetching today's sessions for %s", today.isoformat())
 
-    raw_items = _fetch_action_items(bearer_token, date_filter="today")
-    if raw_items is None:
+    # Build UTC time window covering today in Pacific time (UTC-7/UTC-8)
+    # Use a 25-hour window (midnight-to-midnight + buffer) to catch all local times
+    from datetime import datetime, timezone, timedelta
+    # Today midnight Pacific = today 07:00 UTC (PDT) or 08:00 UTC (PST)
+    # Use noon UTC yesterday to noon UTC tomorrow as safe window, then filter locally
+    due_after = datetime(today.year, today.month, today.day, 7, 0, 0, tzinfo=timezone.utc)
+    due_before = due_after + timedelta(hours=24)
+
+    url = f"{settings.CHILDCARECRM_API_URL}/tasks"
+    base_params = {
+        "group_ids[0]": "4",
+        "group_ids[1]": "5",
+        "due_after": due_after.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "due_before": due_before.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "include_completed": "false",
+        "include_pending_families": "true",
+        "org_id": settings.LINELEADER_CENTER_ORG_ID,  # center org, not parent
+        "calendar_mode": "true",  # includes tasks with show_on_calendar=false
+    }
+
+    headers = {"Authorization": bearer_token, "Accept": "application/json"}
+
+    # Paginate through all results
+    raw_tasks = []
+    page_size = 50
+    offset = 0
+    try:
+        import requests as _requests
+        while True:
+            params = {**base_params, "limit": str(page_size), "offset": str(offset)}
+            resp = _requests.get(url, params=params, headers=headers, timeout=30)
+            resp.raise_for_status()
+            page = resp.json()
+            if not page:
+                break
+            raw_tasks.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+        logger.info("Tasks API returned %d items total", len(raw_tasks))
+    except Exception as e:
+        logger.error("Failed to fetch tasks: %s", e)
         return []
 
-    sessions = _parse_items(raw_items, today)
+    sessions = _parse_tasks(raw_tasks, today)
     sessions.sort(key=lambda s: s.start_time)
-
     logger.info("Found %d session(s) for today", len(sessions))
     return sessions
 
@@ -313,7 +355,73 @@ def _fetch_action_items(
 
 
 # ---------------------------------------------------------------------------
-# Parser
+# Parser for /tasks endpoint (calendar API format)
+# ---------------------------------------------------------------------------
+
+def _parse_tasks(tasks: List[Dict[str, Any]], target_date: date) -> List[GBSSession]:
+    """Parse tasks from the /tasks calendar endpoint into GBSSession objects."""
+    sessions = []
+    for task in tasks:
+        try:
+            # Only Tours (type id 89)
+            task_type = task.get("type", {})
+            type_id = task_type.get("id") if isinstance(task_type, dict) else None
+            if type_id != 89:
+                continue
+
+            # Parse due_date_time
+            date_time_raw = task.get("due_date_time", "")
+            if not date_time_raw:
+                continue
+            start_time = datetime.fromisoformat(date_time_raw)
+
+            # Filter to today in local time
+            local_dt = start_time.astimezone()
+            if local_dt.date() != target_date:
+                continue
+
+            # Family name
+            family = task.get("family", {})
+            family_name = family.get("values", {}).get("name", "") if isinstance(family, dict) else ""
+            name_parts = family_name.strip().split(" ", 1)
+            guardian_first = name_parts[0] if name_parts else ""
+            guardian_last = name_parts[1] if len(name_parts) > 1 else ""
+
+            # Staff
+            staff = task.get("assigned_to_staff", {}) or {}
+            staff_vals = staff.get("values", {}) if isinstance(staff, dict) else {}
+            assignee_first = staff_vals.get("first_name", "")
+            assignee_last = staff_vals.get("last_name", "")
+            assignee_id = str(staff.get("id", "")) if isinstance(staff, dict) else ""
+
+            # Description for tour type
+            description = task.get("result_description") or task.get("description") or ""
+
+            session = GBSSession(
+                item_id=str(task.get("id", "")),
+                student_name=f"{guardian_first} {guardian_last}".strip(),
+                start_time=start_time,
+                tour_type="JR GBS" if _is_junior(description) else "GBS",
+                display_type="Tour",
+                description=description,
+                assignee_name=f"{assignee_first} {assignee_last}".strip(),
+                location_name=task.get("center", {}).get("values", {}).get("name", "") if isinstance(task.get("center"), dict) else "",
+            )
+            sessions.append(session)
+
+        except Exception as e:
+            logger.warning("Failed to parse task %s: %s", task.get("id"), e)
+
+    return sessions
+
+
+def _is_junior(description: str) -> bool:
+    desc_lower = description.lower()
+    return any(kw in desc_lower for kw in ["jr", "junior", "jrs"])
+
+
+# ---------------------------------------------------------------------------
+# Parser for action-items endpoint
 # ---------------------------------------------------------------------------
 
 def _parse_items(
@@ -357,7 +465,6 @@ def _parse_single_item(
         return None
 
     # Only care about Tours — all Tours are GBS Tours
-    display_type = item.get("display_type", "")
     description = item.get("description", "")
     if display_type != "Tour":
         return None

@@ -92,6 +92,9 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 - ⬜ Update Excel export to include MyStudio appointments
 - ⬜ Update `mock_chatbot.py` with MyStudio mock data
 
+#### Backlog (future):
+- ⬜ **Filter appointments by class type** — add `get_todays_appointments_by_type(class_type)` tool with fuzzy name mapping (e.g. "create" → "CREATE (CODING)", "scratch" → "SCRATCH PLUS", "jr" → "JR"). Claude handles natural language → class type mapping. Need to confirm full list of class types from live MyStudio data first.
+
 #### Files created/updated:
 - `sites/mystudio/auth.py` — **COMPLETE REWRITE** (cookie-based auth, not bearer tokens)
 - `sites/mystudio/schedules.py` — **COMPLETE REWRITE** (real confirmed endpoints)

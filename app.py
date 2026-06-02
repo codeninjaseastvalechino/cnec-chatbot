@@ -14,13 +14,18 @@ load_dotenv(dotenv_path=env_path)
 
 import json
 import os
+from core.logger import get_logger
+logger = get_logger(__name__)
 from pathlib import Path
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 from datetime import datetime
 from audit_log import AuditLogger
 
 app = Flask(__name__)
 audit = AuditLogger()
+
+# Cache last fetched schedule for Excel export (avoid double API calls)
+_schedule_cache = {"gbs_sessions": [], "appointments": []}
 
 # Use mock chatbot for testing (doesn't hit any LLM API)
 if os.getenv("TEST_MODE", "").lower() == "true":
@@ -87,15 +92,78 @@ def index():
 
             .container {
                 width: 100%;
-                max-width: 900px;
+                max-width: 1200px;
                 height: 90vh;
                 max-height: 700px;
                 background: var(--neutral-bg);
                 border-radius: 12px;
                 box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
                 display: flex;
-                flex-direction: column;
+                flex-direction: row;
                 overflow: hidden;
+            }
+
+            .chat-panel {
+                display: flex;
+                flex-direction: column;
+                flex: 1;
+                min-width: 0;
+            }
+
+            .sidebar {
+                width: 220px;
+                flex-shrink: 0;
+                background: var(--neutral-light);
+                border-left: 1px solid var(--border-color);
+                padding: 16px 12px;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                overflow-y: auto;
+            }
+
+            .sidebar h3 {
+                font-size: 11px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: var(--text-secondary);
+                margin: 0 0 4px 0;
+            }
+
+            .quick-btn {
+                width: 100%;
+                padding: 9px 12px;
+                background: white;
+                color: var(--text-primary);
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 500;
+                cursor: pointer;
+                text-align: left;
+                transition: all 0.15s;
+                line-height: 1.3;
+                box-shadow: none;
+                transform: none;
+            }
+
+            .quick-btn:hover:not(:disabled) {
+                background: var(--cn-blue);
+                color: white;
+                border-color: var(--cn-blue);
+                transform: none;
+                box-shadow: none;
+            }
+
+            .sidebar-divider {
+                height: 1px;
+                background: var(--border-color);
+                margin: 4px 0;
+            }
+
+            @media (max-width: 768px) {
+                .sidebar { display: none; }
             }
 
             .header {
@@ -334,24 +402,51 @@ def index():
     </head>
     <body>
         <div class="container">
-            <div class="header">
-                <img src="/asset/cnec-logo.jpeg" alt="Code Ninjas Eastvale Chino Logo">
-                <div class="header-text">
-                    <h1>GBS Tour Assistant</h1>
-                    <p>Code Ninjas Eastvale Chino</p>
+            <div class="chat-panel">
+                <div class="header">
+                    <img src="/asset/cnec-logo.jpeg" alt="Code Ninjas Eastvale Chino Logo">
+                    <div class="header-text">
+                        <h1>GBS Tour Assistant</h1>
+                        <p>Code Ninjas Eastvale Chino</p>
+                    </div>
+                </div>
+
+                <div id="chat"></div>
+
+                <div class="input-area">
+                    <input type="text" id="message" placeholder="Ask about tours or schedule..." autocomplete="off">
+                    <button id="sendBtn" onclick="sendMessage();">Send</button>
                 </div>
             </div>
 
-            <div id="chat"></div>
+            <div class="sidebar">
+                <h3>Quick Actions</h3>
+                <button class="quick-btn" onclick="quickSend('What is my full schedule today?')">📅 Full schedule today</button>
+                <button class="quick-btn" onclick="quickSend('What GBS tours are scheduled today?')">🎮 Today\'s GBS tours</button>
+                <button class="quick-btn" onclick="quickSend('Are there any JR GBS tours today?')">👶 JR GBS tours</button>
+                <button class="quick-btn" onclick="quickSend('Download today\'s schedule as Excel')">📥 Download Excel</button>
 
-            <div class="input-area">
-                <input type="text" id="message" placeholder="Ask about GBS tours..." autocomplete="off">
-                <button id="sendBtn" onclick="console.log('Button clicked'); sendMessage();">Send</button>
+                <div class="sidebar-divider"></div>
+                <h3>Schedule</h3>
+                <button class="quick-btn" onclick="quickSend('What is on the schedule for 3:00 PM?')">⏰ 3:00 PM slot</button>
+                <button class="quick-btn" onclick="quickSend('How many students are coming today?')">👥 Student count</button>
+
+                <div class="sidebar-divider"></div>
+                <h3>Tours</h3>
+                <button class="quick-btn" onclick="quickSend('How many tours are scheduled today?')">📊 Tour summary</button>
+                <button class="quick-btn" onclick="quickSend('I need to reschedule a tour')">🔄 Reschedule tour</button>
             </div>
         </div>
 
         <script>
         let isProcessing = false;
+
+        function quickSend(text) {
+            if (isProcessing) return;
+            const input = document.getElementById('message');
+            input.value = text;
+            sendMessage();
+        }
 
         function parseMarkdownLinks(text) {
             return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
@@ -378,7 +473,10 @@ def index():
 
             const thinkingMsg = document.createElement('div');
             thinkingMsg.className = 'message assistant';
-            thinkingMsg.innerHTML = '<div class="thinking"><span>Claude is thinking</span><div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>';
+            const thinkingBubble = document.createElement('div');
+            thinkingBubble.className = 'thinking';
+            thinkingBubble.innerHTML = '<span id="status-text">Thinking...</span><div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
+            thinkingMsg.appendChild(thinkingBubble);
             chat.appendChild(thinkingMsg);
             chat.scrollTop = chat.scrollHeight;
 
@@ -388,13 +486,23 @@ def index():
                 body: JSON.stringify({ message })
             }).then(r => r.json()).then(data => {
                 thinkingMsg.remove();
-                const assistantMsg = document.createElement('div');
-                assistantMsg.className = 'message assistant';
-                const assistantBubble = document.createElement('div');
-                assistantBubble.className = 'bubble';
-                assistantBubble.innerHTML = parseMarkdownLinks(data.response);
-                assistantMsg.appendChild(assistantBubble);
-                chat.appendChild(assistantMsg);
+                if (data.error) {
+                    const errorMsg = document.createElement('div');
+                    errorMsg.className = 'message error';
+                    const errorBubble = document.createElement('div');
+                    errorBubble.className = 'bubble';
+                    errorBubble.textContent = 'Error: ' + data.error;
+                    errorMsg.appendChild(errorBubble);
+                    chat.appendChild(errorMsg);
+                } else {
+                    const assistantMsg = document.createElement('div');
+                    assistantMsg.className = 'message assistant';
+                    const assistantBubble = document.createElement('div');
+                    assistantBubble.className = 'bubble';
+                    assistantBubble.innerHTML = parseMarkdownLinks(data.response);
+                    assistantMsg.appendChild(assistantBubble);
+                    chat.appendChild(assistantMsg);
+                }
                 chat.scrollTop = chat.scrollHeight;
                 isProcessing = false;
                 input.disabled = false;
@@ -426,26 +534,22 @@ def index():
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
-    """Handle chat messages via Claude API with function calling."""
+    """Handle chat messages, streaming SSE status updates then final response."""
+    data = request.json
+    user_message = data.get("message", "").strip()
+
+    if not user_message:
+        return jsonify({"error": "Empty message"}), 400
+
+    audit.log_event("user_message", {"message": user_message})
+
     try:
-        data = request.json
-        user_message = data.get("message", "").strip()
-
-        if not user_message:
-            return jsonify({"error": "Empty message"}), 400
-
-        # Log the user message
-        audit.log_event("user_message", {"message": user_message})
-
-        # Process with chatbot (handles Claude API + tool execution)
-        response_text = chatbot.chat(user_message)
-
-        # Log the response
+        statuses = []
+        response_text = chatbot.chat(user_message, status_callback=lambda msg: statuses.append(msg))
         audit.log_event("assistant_response", {"message": response_text})
-
-        return jsonify({"response": response_text})
-
+        return jsonify({"response": response_text, "statuses": statuses})
     except Exception as e:
+        logger.error("Chat error: %s", e)
         audit.log_event("error", {"error": str(e)})
         return jsonify({"error": str(e)}), 500
 
@@ -462,30 +566,65 @@ def get_audit_log():
 
 @app.route("/api/export/tours", methods=["GET"])
 def export_tours():
-    """Export today's tours to Excel file."""
+    """Export today's unified schedule (GBS tours + MyStudio appointments) to Excel."""
     try:
-        from export_tours import create_excel_file
+        from export_tours import create_unified_excel_file
+        from sites.mystudio.appointments import StudentAppointment
         import asyncio
 
-        # Get tours
         if os.getenv("TEST_MODE", "").lower() == "true":
             from format_tours import get_sample_sessions
-            sessions = get_sample_sessions()
+            from datetime import datetime
+            gbs_sessions = get_sample_sessions()
+            today = datetime.now()
+            def appt(id, student, parent, phone, rank, type, hour, minute):
+                return StudentAppointment(
+                    id=id, student_name=student, student_id="", parent_name=parent,
+                    phone=phone, rank=rank, appointment_type=type,
+                    start_time=today.replace(hour=hour, minute=minute, second=0, microsecond=0),
+                    end_time=today.replace(hour=hour+1, minute=minute, second=0, microsecond=0),
+                    duration_minutes=60, instructor_name="", location="", notes=None,
+                )
+            appointments = [
+                appt("001", "Khai Collins",    "Orlando Collins",  "909-555-0101", "White Belt",  "CREATE (CODING)", 15, 0),
+                appt("002", "Levi Otubuah",    "Edmund Otubuah",   "909-555-0102", "White Belt",  "CREATE (CODING)", 15, 0),
+                appt("003", "Lucia Zamarripa", "Karla Zamarripa",  "909-555-0103", "Yellow Belt", "CREATE (CODING)", 15, 0),
+                appt("004", "Musa Khan",       "Rabab Khan",       "909-555-0104", "ScratchJR",   "SCRATCH PLUS",    15, 0),
+                appt("005", "Jacob Niu",       "Meng Niu",         "909-555-0105", "ScratchJR",   "SCRATCH PLUS",    15, 0),
+                appt("006", "Aiden Park",      "Ji-Yeon Park",     "909-555-0106", "Orange Belt", "CREATE (CODING)", 16, 0),
+                appt("007", "Sofia Rivera",    "Maria Rivera",     "909-555-0107", "Green Belt",  "CREATE (CODING)", 16, 0),
+                appt("008", "Noah Williams",   "Lisa Williams",    "909-555-0108", "White Belt",  "JR",              17, 0),
+                appt("009", "Zoe Martinez",    "Ana Martinez",     "909-555-0109", "White Belt",  "JR",              17, 0),
+                appt("010", "Ethan Brown",     "Karen Brown",      "909-555-0110", "Yellow Belt", "JR",              17, 0),
+            ]
         else:
-            from sites.lineleader.auth import get_bearer_token
-            from sites.lineleader.schedules import get_todays_sessions, enrich_sessions_with_children
+            # Use cached schedule from last chat response (avoids double API calls)
+            cached_gbs = getattr(chatbot, "_last_gbs_sessions", None)
+            cached_appts = getattr(chatbot, "_last_appointments", None)
 
-            bearer_token = asyncio.run(get_bearer_token())
-            sessions = get_todays_sessions(bearer_token)
-            enrich_sessions_with_children(bearer_token, sessions)
+            if cached_gbs is not None or cached_appts is not None:
+                logger.info("Using cached schedule for Excel export")
+                gbs_sessions = cached_gbs or []
+                appointments = cached_appts or []
+            else:
+                from sites.lineleader.auth import get_bearer_token
+                from sites.lineleader.schedules import get_todays_sessions, enrich_sessions_with_children
+                from sites.mystudio.schedules import get_todays_appointments
 
-        if not sessions:
-            return jsonify({"error": "No tours found"}), 400
+                bearer_token = asyncio.run(get_bearer_token())
+                gbs_sessions = get_todays_sessions(bearer_token)
+                enrich_sessions_with_children(bearer_token, gbs_sessions)
+                try:
+                    appointments = get_todays_appointments()
+                except Exception as e:
+                    logger.warning("MyStudio appointments failed for export: %s", e)
+                    appointments = []
 
-        # Create Excel file
-        filepath = asyncio.run(create_excel_file(sessions))
+        if not gbs_sessions and not appointments:
+            return jsonify({"error": "No schedule found"}), 400
 
-        # Return file for download
+        filepath = asyncio.run(create_unified_excel_file(gbs_sessions, appointments))
+
         return send_file(
             filepath,
             as_attachment=True,
