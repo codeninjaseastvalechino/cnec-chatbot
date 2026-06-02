@@ -36,34 +36,44 @@ def _encode(value: str) -> str:
     return base64.b64encode(urllib.parse.quote(value, safe='').encode()).decode()
 
 
+class MystudioOTPRequired(Exception):
+    """Raised when MyStudio needs OTP and can't prompt interactively."""
+    pass
+
+
+# Holds the partial session while waiting for user to enter OTP
+_pending_session: Optional[requests.Session] = None
+
+
 def get_session() -> requests.Session:
     """
     Return an authenticated requests.Session with valid MyStudio cookies.
 
-    Tries to load cached cookies first (30 days).
-    Only does OTP login if cache is missing or expired.
+    If cookies are cached (30 days), returns immediately.
+    If not, triggers OTP email and raises MystudioOTPRequired.
+    Caller must catch MystudioOTPRequired and call complete_otp_login(otp) later.
     """
-    # Try cached cookies first
     cached = _load_cached_cookies()
     if cached:
         logger.info("Using cached MyStudio cookies (30-day cache)")
         return _build_session_from_cookies(cached)
 
-    # Cache miss — do full login with OTP
-    logger.info("No valid cached cookies — doing fresh login")
-    session = _login_with_otp()
-
-    # Cache the cookies
-    _save_cached_cookies(dict(session.cookies))
-    return session
+    # No cache — start login flow (triggers OTP email)
+    logger.info("No valid cached cookies — starting fresh login")
+    _start_login()
+    # _start_login always raises MystudioOTPRequired
 
 
-def _login_with_otp() -> requests.Session:
-    """Do full login: credentials → OTP email → OTP entry → session."""
+def _start_login() -> None:
+    """
+    Step 1 of login: POST credentials → OTP email sent → raise MystudioOTPRequired.
+    Stores partial session in _pending_session for complete_otp_login() to use.
+    """
+    global _pending_session
+
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # Step 1: POST credentials to trigger OTP email
     logger.info("Sending MyStudio credentials...")
     resp = session.post(f"{BASE_URL}/login", json={
         "email": settings.MYSTUDIO_USERNAME,
@@ -78,35 +88,40 @@ def _login_with_otp() -> requests.Session:
         raise Exception(f"MyStudio login failed: {data.get('msg')}")
 
     logger.info("OTP email sent to %s", settings.MYSTUDIO_USERNAME)
+    _pending_session = session
+    raise MystudioOTPRequired(f"OTP sent to {settings.MYSTUDIO_USERNAME}")
 
-    # Step 2: Manual OTP entry
-    otp = os.getenv("MYSTUDIO_OTP")
-    if not otp:
-        print("\n" + "=" * 60)
-        print(f"MyStudio 2FA: Check {settings.MYSTUDIO_USERNAME} for OTP code.")
-        print("=" * 60)
-        otp = input("Enter 6-digit OTP code: ").strip()
-    else:
-        logger.info("Using OTP from environment variable")
-        otp = otp.strip()
 
-    # Step 3: Submit OTP with remember_me=True
+def complete_otp_login(otp: str) -> requests.Session:
+    """
+    Step 2 of login: submit OTP, cache cookies, return authenticated session.
+    Must be called after get_session() raised MystudioOTPRequired.
+    """
+    global _pending_session
+
+    if _pending_session is None:
+        raise Exception("No pending MyStudio login session. Try asking for the schedule again.")
+
     logger.info("Submitting OTP...")
-    resp = session.post(f"{BASE_URL}/login", json={
+    resp = _pending_session.post(f"{BASE_URL}/login", json={
         "email": settings.MYSTUDIO_USERNAME,
         "password": _encode(settings.MYSTUDIO_PASSWORD),
         "is_sso": "N",
         "push_device_id": "",
         "user_agent": HEADERS["User-Agent"],
-        "otpCode": _encode(otp),
+        "otpCode": _encode(otp.strip()),
         "from": "otp_form",
         "remember_me": True,
     })
     data = resp.json()
     if data.get("status") != "Success":
-        raise Exception(f"MyStudio OTP failed: {data.get('msg')}")
+        raise Exception(f"OTP incorrect: {data.get('msg')}")
 
-    logger.info("Logged in as: %s", settings.MYSTUDIO_USERNAME)
+    session = _pending_session
+    _pending_session = None
+
+    _save_cached_cookies(dict(session.cookies))
+    logger.info("MyStudio login complete, cookies cached for 30 days")
     return session
 
 

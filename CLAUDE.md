@@ -44,160 +44,92 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ---
 
+## ⚠️ Common Gotchas
+
+**These are not obvious — remember them:**
+
+| Issue | Impact | Solution |
+|-------|--------|----------|
+| **Forgot `LLM_PROVIDER` env var** | App defaults to Claude, burns API credits silently | Always set `LLM_PROVIDER=claude` or use `TEST_MODE=true` for dev |
+| **MyStudio OTP cookie expires silently** | App hangs on second run after 30 days | App auto-prompts for OTP, just enter 6-digit code from email |
+| **LineLeader token cached for ~1 hour** | Stale data if run after hour-long pause | Safe: 5-min buffer auto re-logins before expiry. Manual: `rm browser_state/lineleader_token.json` |
+| **Mock mode is instant, real mode is not** | Expectations mismatch during dev→prod switch | Mock mode: <10ms responses. Claude mode: ~500-800ms per query |
+| **Playwright needs chromium** | "no suitable image found" error on first run | Run: `playwright install chromium --with-deps` (one-time) |
+| **Python 3.9 type hints** | Import errors on newer syntax | Always use `Optional[str]` not `str \| None`, `List[X]` not `list[X]` |
+
+---
+
 ## Table of Contents
 
+**Core Reference:**
 - [Current Status](#current-status)
-- [Multi-Provider LLM Architecture](#multi-provider-llm-architecture)
-- [Project Structure](#project-structure)
-- [Environment Variables](#environment-variables) ← NEW
-- [How to Run](#how-to-run) ← REORGANIZED
-- [Dependencies & Setup](#dependencies--setup) ← NEW
+- [Common Gotchas](#-common-gotchas)
+- [How to Run](#how-to-run)
+- [Testing](#testing)
 - [Development Commands](#development-commands)
-- [Testing](#testing) ← CLARIFIED
 - [Debugging & Troubleshooting](#debugging--troubleshooting)
+
+**Architecture & Reference:**
+- [Project Structure](#project-structure)
+- [Multi-Provider LLM Architecture](#multi-provider-llm-architecture)
+- [Environment Variables](#environment-variables)
+- [Dependencies & Setup](#dependencies--setup)
 - [Claude API Models & Pricing](#claude-api-models--pricing)
-- [Safety & Design](#safety--design) ← NEW
+- [Safety & Design](#safety--design)
 - [Architecture Decision Log](#architecture-decision-log)
-- [Open Questions](#open-questions)
+- [Site 2 (LineLeader) Deep Dive](#site-2--lineleader-childcarecrm-architecture-milestone-1) — detailed reference
+- [Site 1 (MyStudio) API Reference](#site-1--mystudio-api-reference-milestone-2) — detailed reference
+- [Known Issues & Tracking](#known-issues--tracking)
 - [Users & Permissions](#users--permissions)
 
 ---
 
 ## Current Status
 
-**Active milestone: Milestone 2 — Full Daily Schedule (finishing)**
+**Last updated: 2026-06-02**
 
-| Milestone | Status |
-|-----------|--------|
-| 1 — LineLeader login + GBS/JR GBS tour pull + reschedule | ✅ Complete |
-| 2 — MyStudio login + unified schedule + chat/Excel output | 🔄 In Progress |
-| 3 — Student lookup + camp details | ⬜ Not started |
-| 4 — Move / create / cancel appointments | ⬜ Not started |
-| 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete |
-| 6 — Employee schedule generator (stretch goal) | ⬜ Not started |
+| Milestone | Status | Notes |
+|-----------|--------|-------|
+| 1 — LineLeader login + GBS/JR GBS tour pull + reschedule | ✅ Complete | Production-ready CLI tool |
+| 2 — MyStudio login + unified schedule + chat/Excel output | ✅ Complete | Direct API + OTP 2FA, 30-day cookie caching |
+| 3 — Student lookup + camp details | ⬜ Not started | Next priority |
+| 4 — Move / create / cancel appointments | ⬜ Not started | Post-Milestone 3 |
+| 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete | Web UI + multi-provider LLM (Claude/Ollama) |
+| 6 — Employee schedule generator (stretch goal) | ⬜ Not started | Backlog |
 
-### Milestone 2 — In Progress (2026-06-01)
+### Milestone 2 — Complete (2026-06-02)
 
-**APIs working. Still need: merge LineLeader + MyStudio into unified schedule, wire into chat UI + Excel, update mock chatbot.**
-
-#### Done:
+**What's built:**
 - ✅ MyStudio login + OTP 2FA (direct API, no Playwright)
-- ✅ 30-day cookie caching
-- ✅ `getClassScheduledetails` — time slots
-- ✅ `getClassdatatabledetails` — student roster (full 23-column DataTables request required)
+- ✅ 30-day cookie caching — one OTP login per month
+- ✅ Class schedule fetching (`getClassScheduledetails` + `getClassdatatabledetails`)
+- ✅ Student roster parsing with parent names, ranks, phone numbers
+- ✅ LineLeader switched to `/tasks` endpoint — includes ALL tours
+- ✅ Unified time-ordered schedule (LineLeader + MyStudio merged)
+- ✅ Chat UI + Excel export (Time | Student | Type | Belt | Parent)
+- ✅ Mock chatbot with realistic MyStudio data
+- ✅ OTP flow surfaced in chat UI — user enters code in browser, not terminal
 
-#### Remaining:
-- ⬜ Merge LineLeader tours + MyStudio appointments into unified time-ordered schedule
-- ⬜ Wire MyStudio into chat UI (`chatbot.py`, `app.py`)
-- ⬜ Update Excel export to include MyStudio appointments
-- ⬜ Update `mock_chatbot.py` with MyStudio mock data
+**MyStudio 2FA flow (by design, not a workaround):**
+- Cookies expire every 30 days
+- When expired, chatbot responds in the browser: *"🔐 MyStudio verification needed. An OTP code was sent to eastvalechinocodeninjas@gmail.com. Please reply with the 6-digit code."*
+- User enters code in chat → cookies cached for 30 more days
+- No terminal access needed — fully browser-based
+- Implementation: `MystudioOTPRequired` exception in `auth.py`, caught in `chatbot.py`
 
-#### Backlog (future):
-- ⬜ **Filter appointments by class type** — add `get_todays_appointments_by_type(class_type)` tool with fuzzy name mapping (e.g. "create" → "CREATE (CODING)", "scratch" → "SCRATCH PLUS", "jr" → "JR"). Claude handles natural language → class type mapping. Need to confirm full list of class types from live MyStudio data first.
+**Key architectural decision:** MyStudio uses session-based auth (PHP cookies), NOT bearer tokens. Session persists 30 days with `remember_me: true`.
 
-#### Files created/updated:
-- `sites/mystudio/auth.py` — **COMPLETE REWRITE** (cookie-based auth, not bearer tokens)
-- `sites/mystudio/schedules.py` — **COMPLETE REWRITE** (real confirmed endpoints)
-- `sites/mystudio/appointments.py` — Updated with real API fields
-- `config/settings.py` — Fixed MyStudio URLs, added hardcoded company/user IDs
-- `mock_chatbot.py` — Updated StudentAppointment mock to match new fields
-- `chatbot.py` — Updated to call synchronous `get_todays_appointments()`
-- `format_tours.py` — Updated unified schedule formatter for new `parent_name` field
+**Files created/updated:**
+- `sites/mystudio/auth.py` — Cookie-based session auth
+- `sites/mystudio/schedules.py` — Real confirmed endpoints
+- `sites/mystudio/appointments.py` — StudentAppointment data structures
+- `config/settings.py` — MyStudio URLs + IDs (company_id=578, user_id=9901)
+- `format_tours.py` — Unified schedule formatter
 
-#### Critical architectural discovery:
-**MyStudio uses session-based auth (PHP cookies), NOT bearer tokens.**
-- `c_u_id_9901`, `c_u_id_9901_sessid`, `PHPSESSID` are the session cookies
-- No Authorization header needed — cookies carry the session
-- `remember_me: true` in OTP POST → cookies persist 30 days
-- Cookie cache file: `browser_state/mystudio_cookies.json`
-- Session validity checked via `GET /Api/PortalApi/verifySession`
+**For detailed MyStudio API specs, credentials, and implementation notes:** See [Site 1 (MyStudio) API Reference](#site-1--mystudio-api-reference-milestone-2) at the end of this document.
 
-#### Confirmed MyStudio API endpoints (from Playwright network capture 2026-05-31):
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `POST /Api/PortalApi/login` | POST | Step 1: credentials → triggers OTP email |
-| `POST /Api/PortalApi/login` | POST | Step 2: OTP verification → sets session cookies |
-| `GET /Api/PortalApi/verifySession` | GET | Check if session is still valid |
-| `GET /Api/PortalApi/getClassScheduledetails` | GET | Today's class time slots |
-| `POST /Api/PortalApi/getClassdatatabledetails` | POST | Student roster for a time slot |
-
-**All URLs are at `https://cn.mystudio.io/v43/Api/PortalApi/`**
-
-#### Confirmed IDs (Code Ninjas Eastvale Chino — hardcoded in settings.py):
-- `company_id = "578"`
-- `user_id = "9901"` (the logged-in user ID)
-- login email = `eastvalechinocodeninjas@gmail.com`
-
-#### Login flow (confirmed from real browser capture):
-1. `POST /login` with `{"email": "...", "password": BASE64("actual_password"), "from": "login_form"}`
-2. Server responds `{"status": "Success", "msg": "One time passcode has been send to..."}` and sends OTP email
-3. `POST /login` with `{"otpCode": BASE64("6_digit_code"), "from": "otp_form", "remember_me": true, ...}`
-4. Server responds with full company/user JSON + sets session cookies
-5. All subsequent API calls use those cookies — no Authorization header
-
-#### Schedule fetch flow:
-1. `GET getClassScheduledetails?company_id=578&selected_date=2026-06-01&class_scheduler_verion=2&view_roster_flag=N`
-   - Returns list of class types (e.g., "CREATE (CODING)", "JR") with time slots
-   - Each slot has: `class_appointment_times_id`, `start_time`, `reg_count_time`, `capacity_value`
-2. For each slot with `reg_count_time > 0`: `POST getClassdatatabledetails` (form-encoded, DataTables format)
-   - Returns student records with: `Participant` (student name), `Buyer` (parent name), `Phone`, `rank_status`, `end_time`, `class_reg_id`
-
-#### StudentAppointment fields (from real API):
-| Field | Source |
-|-------|--------|
-| `id` | `class_reg_id` |
-| `student_name` | `Participant` |
-| `student_id` | `student_id` |
-| `parent_name` | `Buyer` |
-| `phone` | `Phone` |
-| `rank` | `rank_status` (e.g., "White Belt") |
-| `appointment_type` | class title from schedule (e.g., "CREATE (CODING)", "JR") |
-| `start_time` | from slot `start_time` field |
-| `end_time` | from `end_time` in student record (e.g., "2026-06-01 16:00:00") |
-
-#### What's confirmed working (2026-06-01):
-- ✅ Direct API login with OTP 2FA — `sites/mystudio/auth.py`
-- ✅ Session cookie caching (30 days) — `browser_state/mystudio_cookies.json`
-- ✅ Auto-login on second run — loads cached cookies, no OTP needed
-- ✅ `getClassScheduledetails` — returns all class types + time slots
-- ✅ `getClassdatatabledetails` — returns student roster for each time slot
-- ✅ Full daily schedule parsing — 27 students across 9 time slots (example output)
-- ✅ Test script `test_updated_schedules.py` shows all time slots with students
-
-#### Key fix (what made roster work):
-The API requires the **full DataTables request with all 23 column definitions**, not just minimal form data.
-Previously we were sending:
-```python
-{"draw": "1", "company_id": "578", "class_appointment_times_id": "27389", ...}  # ❌ 500 error
-```
-Now sending:
-```python
-{
-  "draw": "1",
-  "columns[0][data]": "",
-  "columns[1][data]": "show_icon",
-  "columns[2][data]": "Participant",
-  ...
-  "columns[22][data]": "",
-  # ... all 23 columns defined
-}  # ✅ 200 OK, data returned
-```
-
-#### Auth details confirmed:
-- Login email: `eastvalechinocodeninjas@gmail.com` (set in `.env` as `MYSTUDIO_USERNAME`)
-- Password encoding: `base64(urllib.parse.quote(password, safe=''))` — the `safe=''` is critical (encodes `@` as `%40`)
-- OTP encoding: same `base64(urllib.parse.quote(otp, safe=''))` 
-- Gmail App Password: NOT available (Google Workspace corp account — app passwords disabled by admin)
-- OTP flow: manual entry in terminal (user checks email, types 6-digit code)
-- Cookie file: `browser_state/mystudio_cookies.json`
-- Session cookies: `PHPSESSID`, `c_u_id_9901_sessid`, `ms_trace_id`, `ms_u_em`
-- Note: `c_u_id_9901` cookie not appearing in direct API login (only in browser flow) — session still works via `verifySession`
-
-#### Known issue to watch for:
-The `getClassdatatabledetails` POST previously returned 500 errors when called from Python requests directly (before Playwright session extraction). The fix is the Playwright-extracted cookies. If it still 500s, check:
-- Are all cookies being set? Print `session.cookies.get_dict()` after `get_session()`
-- Is `X-Requested-With: XMLHttpRequest` header present? (Required for this endpoint)
-- Is Content-Type `application/x-www-form-urlencoded`? (Not JSON)
+**Backlog:**
+- ⬜ Filter appointments by class type (fuzzy mapping: "create" → "CREATE (CODING)")
 
 ### Milestone 1 — What's built
 - `get_todays_sessions()` — fetches today's Tours via action-items API, filters `display_type == "Tour"`
@@ -945,6 +877,21 @@ pip install --upgrade anthropic
 playwright install chromium --with-deps
 ```
 
+### First-Time Setup Checklist
+
+Before running any milestone, verify this checklist:
+
+- [ ] Python 3.9 confirmed: `python3 --version`
+- [ ] Virtual environment created and activated: `source .venv/bin/activate`
+- [ ] Dependencies installed: `pip install -r requirements.txt`
+- [ ] Playwright browsers installed: `playwright install chromium`
+- [ ] `.env` file created from `.env.example`
+- [ ] Required credentials filled in: `LINELEADER_USERNAME`, `LINELEADER_PASSWORD`, `ANTHROPIC_API_KEY` (for Claude mode)
+- [ ] Token cache cleared (fresh login): `rm -f browser_state/*.json`
+- [ ] Quick test: `TEST_MODE=true python3 app.py` succeeds and web UI loads at `http://localhost:5001`
+
+If any step fails, check [Debugging & Troubleshooting](#debugging--troubleshooting) → [Login Fails](#login-fails).
+
 ---
 
 ## How to Run
@@ -1232,56 +1179,54 @@ ping 192.168.x.x  # should work if on same network
 
 ## Testing
 
-**Current status:** Manual testing only. Unit tests (pytest) planned for Milestone 2+ before adding MyStudio/Homebase.
+**Testing matrix — choose based on your goal:**
 
-### Testing Approaches (Manual)
+| Scenario | Command | Cost | Speed | Best For |
+|----------|---------|------|-------|----------|
+| **Rapid UI iteration** | `TEST_MODE=true python3 app.py` | Free | Instant | UI debugging, no API calls |
+| **CLI tool (real data)** | `python3 run_milestone1.py` | Free | ~2-5 sec | Tour reschedule workflow |
+| **Chatbot engine only** | `python3 test_chatbot.py` | Free (mock) or $0.001-0.005 (Claude) | <1 sec (mock), ~500ms (Claude) | Tool calling & Claude integration |
+| **Full integration** | `python3 app.py` | $0.001-0.005/query | <1 sec | Pre-production validation |
 
-#### 1. CLI Tool — Real LineLeader Data (Milestone 1)
-```bash
-python3 run_milestone1.py
-```
+### Testing Approaches
 
-- Tests login flow, API calls, and reschedule functionality
-- Requires valid `.env` credentials
-- Shows live data from LineLeader
-- Exit code indicates success/failure (see [How to Run](#milestone-1-cli-tool-gbs-tours--reschedule))
+**Current status:** Manual testing only. Unit tests (pytest) planned for Milestone 3+ (MyStudio/Homebase modules).
 
----
-
-#### 2. Web UI — Mock Data (Milestone 5, Zero Cost)
+#### 1. Web UI — Mock Mode (Fastest, Zero Cost)
 ```bash
 TEST_MODE=true python3 app.py
 ```
+- Starts Flask on `http://localhost:5001`
+- Instant mock responses (no API calls)
+- Perfect for UI iteration and debugging
+- No credentials needed
 
-- Tests full chat UI without burning Claude API tokens or LineLeader credits
-- Uses `MockChatbotEngine` instead of real Claude
-- Navigate to `http://localhost:5001` and chat with mock tours
-- **Best for:** UI iteration, testing chat flow, debugging without cost
-
----
-
-#### 3. Web UI — Real Claude + Real Data (Milestone 5, Production)
+#### 2. CLI Tool — Real LineLeader Data
 ```bash
-python3 app.py
+python3 run_milestone1.py
 ```
+- Tests login flow, API calls, reschedule workflow
+- Shows live data from LineLeader
+- Requires `.env` credentials
+- Exit code indicates success/failure
 
-- Real Claude API + real LineLeader data
-- Requires valid `ANTHROPIC_API_KEY` in `.env`
-- Cost: ~$0.001–0.005 per query (Haiku)
-- **Best for:** Integration testing, pre-production verification
-
----
-
-#### 4. Chatbot Engine — Interactive CLI (Milestone 5, Debugging)
+#### 3. Chatbot Engine CLI — Direct Testing
 ```bash
 python3 test_chatbot.py
 ```
-
-- Direct testing of `ChatbotEngine` or `MockChatbotEngine`
+- Interactive chat with ChatbotEngine or MockChatbotEngine
+- Type queries, see Claude tool responses
 - No web UI overhead
-- Type queries and see results immediately
-- Type `quit` to exit
-- **Best for:** Debugging tool responses, testing Claude function calling, rapid iteration
+- Best for debugging tool integration
+
+#### 4. Full Integration — Real Claude + Real Data
+```bash
+python3 app.py
+```
+- Real Claude API + real LineLeader/MyStudio data
+- Requires `ANTHROPIC_API_KEY` in `.env`
+- Cost: ~$0.001-0.005 per query
+- Best for final validation before deployment
 
 ---
 
@@ -1322,18 +1267,222 @@ def mock_lineleader_api(monkeypatch):
 
 ---
 
-## Open Questions
+## Known Issues & Tracking
 
-| # | Question | Status |
-|---|----------|--------|
-| 1 | MyStudio API endpoints | ✅ Confirmed — see Milestone 2 section above |
-| 2 | Does MyStudio rate-limit Playwright? | 🔄 Not yet tested — watch for 429 on repeated logins |
-| 3 | Homebase API write endpoints for schedule publishing | ✅ Confirmed working |
-| 4 | LineLeader write endpoint for rescheduling Tours | ✅ Confirmed — `PUT /api/v3/tasks/{item_id}` |
-| 5 | Child name lookup from family record | ✅ Confirmed — `GET /families/{id}` → `children[]` |
-| 6 | GBS vs JR GBS distinction | ✅ Confirmed — description field + `custom_values JUNIOR` fallback |
-| 7 | Gmail App Password for 2FA extraction | ❌ Not available — Google Workspace corp account. Using manual OTP prompt instead. |
-| 8 | Does `remember_me: true` actually persist cookies 30 days? | 🔄 Test — cache to `browser_state/mystudio_cookies.json` |
+### ✅ Confirmed & Resolved
+| Question | Answer |
+|----------|--------|
+| MyStudio API endpoints | Confirmed — session-based auth with OTP 2FA |
+| Homebase write endpoints | Confirmed working |
+| LineLeader reschedule endpoint | Confirmed — `PUT /api/v3/tasks/{item_id}` |
+| Child name lookup from family | Confirmed — `GET /families/{id}` → `children[]` |
+| GBS vs JR GBS distinction | Confirmed — description field + `custom_values JUNIOR` fallback |
+| Cookie persistence (MyStudio) | Confirmed — cookies persist 30 days with `remember_me: true` |
+
+### ⚠️ Known Limitations
+| Issue | Workaround |
+|-------|-----------|
+| Gmail App Passwords unavailable | Google Workspace disabled app passwords. Using manual OTP entry in terminal instead. |
+| Ollama tool calling unreliable | Ollama models ignore tool definitions. Use `TEST_MODE=true` for cost-free testing instead. |
+
+### 🔄 In Progress / Untested
+| Question | Notes |
+|----------|-------|
+| Does MyStudio rate-limit repeated logins? | Watch for 429 errors if testing OTP flow repeatedly |
+| Homebase student lookup API | Not yet implemented (Milestone 3) |
+| Employee schedule generation | Stretch goal (Milestone 6)
+
+---
+
+---
+
+# APPENDIX: Detailed Technical Reference
+
+## Site 1 — MyStudio API Reference (Milestone 2)
+
+**Base URL:** `https://cn.mystudio.io/v43/Api/PortalApi/`
+
+**Auth method:** Session cookies (PHP-based), persisted 30 days with `remember_me: true`
+
+**Company IDs (Code Ninjas Eastvale Chino):**
+- `company_id = "578"`
+- `user_id = "9901"`
+- Login email: `eastvalechinocodeninjas@gmail.com`
+
+### Login Flow
+
+1. **Step 1:** POST `/Api/PortalApi/login`
+   ```json
+   {
+     "email": "eastvalechinocodeninjas@gmail.com",
+     "password": "base64(urllib.parse.quote(password, safe=''))",
+     "from": "login_form"
+   }
+   ```
+   Response: OTP email sent to inbox
+
+2. **Step 2:** POST `/Api/PortalApi/login` (with OTP)
+   ```json
+   {
+     "otpCode": "base64(urllib.parse.quote('6_digit_code', safe=''))",
+     "from": "otp_form",
+     "remember_me": true
+   }
+   ```
+   Response: Session cookies set (`PHPSESSID`, `c_u_id_9901_sessid`, `ms_trace_id`, `ms_u_em`)
+
+**Critical detail:** Password/OTP encoding uses `safe=''` parameter. The `@` in email must encode to `%40`.
+
+### API Endpoints
+
+| Endpoint | Method | Purpose | Query Params |
+|----------|--------|---------|--------------|
+| `getClassScheduledetails` | GET | Fetch class time slots | `company_id`, `selected_date`, `class_scheduler_verion=2`, `view_roster_flag=N` |
+| `getClassdatatabledetails` | POST | Student roster for a slot | Form-encoded, DataTables format (23-column headers required) |
+| `verifySession` | GET | Check session validity | None |
+
+### StudentAppointment Fields (from API response)
+
+| Field | Source | Example |
+|-------|--------|---------|
+| `id` | `class_reg_id` | `"12345"` |
+| `student_name` | `Participant` | `"Journei Ashbourne"` |
+| `student_id` | API response `student_id` | `"98765"` |
+| `parent_name` | `Buyer` | `"Wittie Hughes"` |
+| `phone` | `Phone` | `"(415) 815-9602"` |
+| `rank` | `rank_status` | `"White Belt"` |
+| `appointment_type` | Class title | `"CREATE (CODING)"` or `"JR"` |
+| `start_time` | Slot `start_time` | `"2026-06-01 09:00:00"` |
+| `end_time` | Student record | `"2026-06-01 16:00:00"` |
+
+### Known Implementation Details
+
+**DataTables request format is mandatory:** The `getClassdatatabledetails` endpoint requires all 23 column definitions, not just minimal form data. Missing columns returns 500 error.
+
+Example columns array (partial):
+```
+columns[0][data]=""
+columns[1][data]="show_icon"
+columns[2][data]="Participant"
+columns[3][data]="Buyer"
+... (through columns[22][data]="")
+```
+
+**Session cookie caching:** Cookies cached to `browser_state/mystudio_cookies.json`. On day 31, app automatically prompts for new OTP. This IS the intended design, not a workaround.
+
+**Limitations:**
+- Gmail App Passwords unavailable (Google Workspace admin disabled them)
+- OTP entry is manual (user reads email, types 6-digit code in terminal)
+
+---
+
+## Site 2 — LineLeader (ChildCareCRM) Architecture (Milestone 1)
+
+**Key discovery:** LineLeader is owned by ChildCareCRM. Login at `login.lineleader.com` → redirects to `my.childcarecrm.com`. API at `live.childcarecrm.com/api/v3/`
+
+**Base URL:** `https://live.childcarecrm.com/api/v3/`
+
+**Auth method:** OAuth2 PKCE flow → Bearer JWT token (cached ~1 hour, 5-min safety buffer)
+
+**Organization IDs (Code Ninjas Eastvale Chino):**
+- `org_id = 101178`
+- `center_id = 102025`
+- `staff_id = 58347`
+
+### Auth Flow
+
+```
+1. Playwright logs in at login.lineleader.com (form submission)
+   ↓
+2. OAuth2 PKCE flow runs automatically (server generates CSRF + code challenges)
+   ↓
+3. Browser redirects to my.childcarecrm.com
+   ↓
+4. App calls POST /api/v3/sso/login → returns Bearer JWT
+   ↓
+5. Token cached to browser_state/lineleader_token.json (exp time + 5-min buffer)
+   ↓
+6. All subsequent API calls use: Authorization: Bearer <token>
+```
+
+**Why Playwright for login:** OAuth2 PKCE uses cryptographic code challenges and server-generated CSRF tokens across a multi-step redirect chain. Cannot replicate with raw requests.
+
+### API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `POST /sso/login` | POST | Validate session, return Bearer JWT |
+| `GET /action-items?task_dash_dates[0]=today&org_id=101178` | GET | Today's sessions/tours |
+| `GET /action-items?task_dash_dates[0]=future&org_id=101178` | GET | Upcoming sessions |
+| `GET /tasks/{item_id}` | GET | Full task object (needed before reschedule) |
+| `PUT /tasks/{item_id}` | PUT | Update task (reschedule, cancel, etc.) |
+| `GET /families/{family_id}` | GET | Full family record including children[] |
+| `GET /staff/58347` | GET | Logged-in user info |
+| `GET /centers/102025` | GET | Center details |
+
+### Reschedule Endpoint
+
+```
+PUT https://live.childcarecrm.com/api/v3/tasks/{item_id}
+Content-Type: application/json
+Authorization: Bearer <token>
+```
+
+**Request body (full object required):**
+```json
+{
+  "id": 2003102,
+  "family": 929179,
+  "type": 89,
+  "assigned_to_staff": 58347,
+  "assigned_by_user_id": 58347,
+  "due_date_time": "2026-05-28T04:30:00Z",
+  "description": "",
+  "is_completed": false,
+  "completed_by_user_id": null,
+  "completed_date_time": null,
+  "result_type": null,
+  "result_description": "",
+  "is_canceled": false,
+  "duration": 30
+}
+```
+
+**Key fields:**
+- `due_date_time` — ISO 8601 UTC — **this is the field that changes for reschedule**
+- `type: 89` — Task type ID for Tours (GBS)
+- `family` — Family ID (integer)
+- `duration` — Session length in minutes (30 default)
+- Full object must be sent (GET first, modify, then PUT)
+
+### GBSSession Fields
+
+| Field | Source |
+|-------|--------|
+| `student_name` | Guardian first + last name (from action-items) |
+| `start_time` | `date_time` converted from UTC to local |
+| `tour_type` | `"GBS"` or `"JR GBS"` — determined by description field (contains "JR") or custom_values.JUNIOR fallback |
+| `item_id` | Task ID (used for GET/PUT reschedule) |
+| `assignee_name` | Staff member name |
+| `family_id` | Populated by enrichment step |
+| `child_names` | List of child names — populated by enrichment (two-step API lookup) |
+| `child_display` | `"Name (Xy)"` format for table display |
+
+### Family Enrichment
+
+Child names are NOT returned in the action-items response. Two-step lookup required:
+1. `GET /tasks/{item_id}` → extract `family.id`
+2. `GET /families/{family_id}` → extract `children[]` array
+
+**Important:** Child's last name often differs from guardian's (e.g., Wittie Hughes → child: Journei Ashbourne). Child name matching is essential for NLP queries.
+
+**Age calculation:** `date_of_birth` ISO string → `_calculate_age()` → display as `"Name (Xy)"` in table.
+
+### Login Form Selectors
+
+- Username: `#username` (name="_username")
+- Password: `#password` (name="_password")
+- Submit: `button[type="submit"]`
 
 ---
 

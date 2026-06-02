@@ -25,6 +25,7 @@ for key, value in env_vars.items():
         os.environ[key] = value
 
 from core.logger import get_logger
+from config.settings import settings
 from llm_provider import get_provider
 from sites.lineleader.auth import get_bearer_token
 from sites.lineleader.schedules import (
@@ -33,6 +34,7 @@ from sites.lineleader.schedules import (
     reschedule_tour,
 )
 from sites.mystudio.schedules import get_todays_appointments
+from sites.mystudio.auth import MystudioOTPRequired, complete_otp_login
 from format_tours import format_unified_schedule
 from export_tours import create_unified_excel_file
 
@@ -43,14 +45,10 @@ class ChatbotEngine:
     """Handles conversations with any LLM provider, including tool execution."""
 
     def __init__(self, provider=None):
-        """
-        Initialize ChatbotEngine with an LLM provider.
-
-        If provider is None, it will be loaded from LLM_PROVIDER environment variable.
-        """
         self.provider = provider or get_provider()
         self.conversation_history = []
         self.bearer_token = None
+        self._awaiting_mystudio_otp = False
 
     # Friendly status messages shown to user while tools run
     _TOOL_STATUS = {
@@ -66,6 +64,10 @@ class ChatbotEngine:
 
         status_callback: optional callable(str) called with status updates during tool execution.
         """
+        # If waiting for MyStudio OTP, handle before passing to LLM
+        if self._awaiting_mystudio_otp:
+            return self._handle_otp_submission(user_message)
+
         self.conversation_history.append({
             "role": "user",
             "content": user_message
@@ -358,6 +360,24 @@ When rescheduling, always confirm the details with the user before making change
         except Exception as e:
             raise RuntimeError(f"Failed to reschedule tour: {e}")
 
+    def _handle_otp_submission(self, user_message: str) -> str:
+        """Handle OTP code submitted via chat."""
+        otp = user_message.strip()
+        if not (otp.isdigit() and len(otp) == 6):
+            return (
+                "That doesn't look like a 6-digit code. "
+                f"Please check {settings.MYSTUDIO_USERNAME} for the OTP email and enter the 6-digit code."
+            )
+        try:
+            complete_otp_login(otp)
+            self._awaiting_mystudio_otp = False
+            return (
+                "✅ MyStudio connected! Cookies cached for 30 days.\n\n"
+                "Please ask your question again and I'll fetch the full schedule."
+            )
+        except Exception as e:
+            return f"❌ OTP failed: {e}\n\nPlease check the code and try again."
+
     def _handle_get_todays_full_schedule(self) -> str:
         """Get today's full schedule (GBS tours + student appointments, merged and sorted)."""
         try:
@@ -370,6 +390,13 @@ When rescheduling, always confirm the details with the user before making change
             appointments = []
             try:
                 appointments = get_todays_appointments()
+            except MystudioOTPRequired:
+                self._awaiting_mystudio_otp = True
+                return (
+                    "🔐 **MyStudio verification needed.**\n\n"
+                    f"An OTP code was sent to **{settings.MYSTUDIO_USERNAME}**.\n\n"
+                    "Please check your email and reply with the **6-digit code** to continue."
+                )
             except Exception as e:
                 logger.warning("Failed to fetch MyStudio appointments: %s", e)
                 appointments = []
