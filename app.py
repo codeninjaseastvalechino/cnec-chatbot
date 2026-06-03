@@ -390,6 +390,7 @@ def index():
                 box-shadow: 0 4px 12px rgba(255, 109, 0, 0.3);
             }
 
+
             button:active:not(:disabled) {
                 transform: translateY(0);
             }

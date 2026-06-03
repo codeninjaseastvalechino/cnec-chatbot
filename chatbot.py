@@ -161,7 +161,10 @@ class ChatbotEngine:
 
     def _get_system_prompt(self) -> str:
         """System prompt: identity, safety, tone only."""
-        return """You are an operations assistant for Code Ninjas Eastvale Chino.
+        from datetime import date
+        today = date.today().strftime("%A, %B %d, %Y")
+        return f"""You are an operations assistant for Code Ninjas Eastvale Chino.
+Today is {today}.
 You help staff manage daily schedules, student appointments, and tours
 by querying the center's systems and taking action on their behalf.
 
