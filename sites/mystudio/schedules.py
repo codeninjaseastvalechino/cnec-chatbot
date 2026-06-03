@@ -58,10 +58,24 @@ def get_todays_appointments() -> List[StudentAppointment]:
     """
     Fetch today's student appointments from MyStudio.
 
+    Returns:
+        List of StudentAppointment objects sorted by start_time
+    """
+    today_str = date.today().strftime("%Y-%m-%d")
+    return get_appointments_for_date(today_str)
+
+
+def get_appointments_for_date(date_str: str) -> List[StudentAppointment]:
+    """
+    Fetch student appointments from MyStudio for a specified date.
+
+    Args:
+        date_str: Date string in YYYY-MM-DD format (e.g., "2026-06-03")
+
     Flow:
     1. Authenticate session
     2. Call initialization endpoints (checkClassScheduleFeatureAvailabilty, getMenuNames, etc.)
-    3. GET getClassScheduledetails for today → list of classes + time slots
+    3. GET getClassScheduledetails for the date → list of classes + time slots
     4. For each time slot, POST getClassdatatabledetails → student roster
     5. Deduplicate (a student may appear in multiple time slots) by student_id
     6. Return sorted by start_time
@@ -69,8 +83,7 @@ def get_todays_appointments() -> List[StudentAppointment]:
     Returns:
         List of StudentAppointment objects sorted by start_time
     """
-    today_str = date.today().strftime("%Y-%m-%d")
-    logger.info("Fetching MyStudio schedule for %s", today_str)
+    logger.info("Fetching MyStudio schedule for %s", date_str)
 
     session = get_session()
 
@@ -78,9 +91,9 @@ def get_todays_appointments() -> List[StudentAppointment]:
     _initialize_session(session)
 
     # Step 1: Get class schedule (time slots)
-    schedule = _get_class_schedule(session, today_str)
+    schedule = _get_class_schedule(session, date_str)
     if not schedule:
-        logger.info("No classes scheduled for %s", today_str)
+        logger.info("No classes scheduled for %s", date_str)
         return []
 
     # Step 2: Collect all time slots across all class types
@@ -109,7 +122,7 @@ def get_todays_appointments() -> List[StudentAppointment]:
         if int(slot.get("reg_count", "0")) == 0:
             continue  # Skip empty slots
 
-        students = _get_slot_roster(session, slot["class_appointment_times_id"], today_str)
+        students = _get_slot_roster(session, slot["class_appointment_times_id"], date_str)
         for student in students:
             reg_id = student.get("class_reg_id", "")
             if reg_id in seen_class_reg_ids:

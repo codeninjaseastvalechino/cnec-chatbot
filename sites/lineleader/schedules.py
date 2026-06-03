@@ -92,14 +92,35 @@ def get_todays_sessions(bearer_token: str) -> List[GBSSession]:
         List of GBSSession objects sorted by start time.
     """
     today = date.today()
-    logger.info("Fetching today's sessions for %s", today.isoformat())
+    return get_sessions_for_date(bearer_token, today.strftime("%Y-%m-%d"))
 
-    # Build UTC time window covering today in Pacific time (UTC-7/UTC-8)
+
+def get_sessions_for_date(bearer_token: str, target_date: str) -> List[GBSSession]:
+    """
+    Fetch all GBS Tours scheduled for a specific date from the ChildCareCRM API.
+
+    Args:
+        bearer_token: Bearer JWT from auth
+        target_date: Date string in YYYY-MM-DD format (e.g., "2026-06-03")
+
+    Returns:
+        List of GBSSession objects sorted by start time.
+    """
+    from datetime import datetime as dt, timezone, timedelta
+
+    logger.info("Fetching sessions for %s", target_date)
+
+    try:
+        target_dt = dt.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError:
+        logger.error("Invalid date format: %s", target_date)
+        return []
+
+    # Build UTC time window covering the target date in Pacific time (UTC-7/UTC-8)
     # Use a 25-hour window (midnight-to-midnight + buffer) to catch all local times
-    from datetime import datetime, timezone, timedelta
-    # Today midnight Pacific = today 07:00 UTC (PDT) or 08:00 UTC (PST)
+    # Target date midnight Pacific = target date 07:00 UTC (PDT) or 08:00 UTC (PST)
     # Use noon UTC yesterday to noon UTC tomorrow as safe window, then filter locally
-    due_after = datetime(today.year, today.month, today.day, 7, 0, 0, tzinfo=timezone.utc)
+    due_after = dt(target_dt.year, target_dt.month, target_dt.day, 7, 0, 0, tzinfo=timezone.utc)
     due_before = due_after + timedelta(hours=24)
 
     url = f"{settings.CHILDCARECRM_API_URL}/tasks"
@@ -138,27 +159,9 @@ def get_todays_sessions(bearer_token: str) -> List[GBSSession]:
         logger.error("Failed to fetch tasks: %s", e)
         return []
 
-    sessions = _parse_tasks(raw_tasks, today)
+    sessions = _parse_tasks(raw_tasks, target_dt)
     sessions.sort(key=lambda s: s.start_time)
-    logger.info("Found %d session(s) for today", len(sessions))
-    return sessions
-
-
-def get_sessions_for_date(bearer_token: str, target_date: date) -> List[GBSSession]:
-    """
-    Fetch GBS Tours for a specific date.
-    Uses 'future' filter then filters client-side to the target date.
-    """
-    logger.info("Fetching sessions for %s", target_date.isoformat())
-
-    raw_items = _fetch_action_items(bearer_token, date_filter="future")
-    if raw_items is None:
-        return []
-
-    sessions = _parse_items(raw_items, target_date)
-    sessions.sort(key=lambda s: s.start_time)
-
-    logger.info("Found %d session(s) for %s", len(sessions), target_date.isoformat())
+    logger.info("Found %d session(s) for %s", len(sessions), target_date)
     return sessions
 
 

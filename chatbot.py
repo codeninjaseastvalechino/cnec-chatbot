@@ -50,12 +50,16 @@ class ChatbotEngine:
         self.bearer_token = None
         self._awaiting_mystudio_otp = False
 
+        # Tool registry: name → {definition, handler}
+        # Add new tools via _register() in _register_tools() only
+        self._tools = {}
+        self._register_tools()
+
     # Friendly status messages shown to user while tools run
     _TOOL_STATUS = {
-        "get_todays_gbs_tours":      "Fetching GBS tours from LineLeader...",
-        "get_tour_details":          "Looking up tour details...",
-        "reschedule_tour":           "Rescheduling tour...",
-        "get_todays_full_schedule":  "Fetching schedule from LineLeader and MyStudio...",
+        "get_gbs_tours":      "Fetching GBS tours from LineLeader...",
+        "reschedule_tour":    "Rescheduling tour...",
+        "get_full_schedule":  "Fetching schedule from LineLeader and MyStudio...",
     }
 
     def chat(self, user_message: str, status_callback=None) -> str:
@@ -76,7 +80,7 @@ class ChatbotEngine:
         while True:
             response_data = self.provider.call(
                 messages=self.conversation_history,
-                system_prompt=self._get_system_prompt(),
+                system_prompt=self._get_system_prompt() + self._get_tool_instructions(),
                 tools=self._get_tools(),
             )
 
@@ -156,7 +160,7 @@ class ChatbotEngine:
                 return f"Unexpected response: {response_data['type']}"
 
     def _get_system_prompt(self) -> str:
-        """System prompt for the chatbot."""
+        """System prompt: identity, safety, tone only."""
         return """You are an operations assistant for Code Ninjas Eastvale Chino.
 You help staff manage daily schedules, student appointments, and tours
 by querying the center's systems and taking action on their behalf.
@@ -175,109 +179,166 @@ SAFETY RULES — non-negotiable:
 
 Be concise and friendly. Staff are busy — get to the point."""
 
+    def _get_tool_instructions(self) -> str:
+        """TOOL REQUIREMENTS - What tools MUST do in their responses."""
+        return """
+TOOL OUTPUT REQUIREMENTS:
+
+When a tool returns schedule data (tours or classes):
+  • YOU MUST ALWAYS include the Excel download link at the end
+  • Format: "📥 **Download as Excel:** [Download this schedule](/api/export/tours)"
+  • This is NOT optional - every schedule response must have it
+
+When a tool returns a single tour/class detail:
+  • Include relevant parent/student contact info
+  • Keep format concise (1-3 lines)
+
+When a tool execution fails:
+  • Report the specific error to the user
+  • Do NOT attempt workarounds
+  • Suggest the user try again or provide more specific input"""
+
+    def _register_tools(self):
+        """
+        Register all available tools.
+        To add a new tool: add a _register() call here + a handler method below.
+        Nothing else needs to change.
+        """
+        self._register(
+            name="get_full_schedule",
+            description=(
+                "Fetches the complete schedule for a specified date: both GBS tours "
+                "from LineLeader AND enrolled student class sessions from MyStudio "
+                "(CREATE CODING, SCRATCH PLUS, JR, etc.), merged in chronological order. "
+                "Use this whenever the user asks about a date's schedule, what's happening "
+                "then, students coming in, or anything not limited to prospective family "
+                "tours only. If no date is specified, defaults to today."
+            ),
+            parameters={
+                "date": {
+                    "type": "string",
+                    "description": "Date in YYYY-MM-DD format (e.g., 2026-06-03). Defaults to today if not specified.",
+                }
+            },
+            handler=self._handle_get_full_schedule,
+        )
+        self._register(
+            name="get_gbs_tours",
+            description=(
+                "Fetches GBS tour appointments from LineLeader for a specified date. "
+                "These are visits by prospective families who have not enrolled yet — "
+                "not current students. Returns guardian name, child name and age, "
+                "tour type (GBS or JR GBS), scheduled time, and assigned staff member. "
+                "If no date is specified, defaults to today."
+            ),
+            parameters={
+                "date": {
+                    "type": "string",
+                    "description": "Date in YYYY-MM-DD format (e.g., 2026-06-03). Defaults to today if not specified.",
+                }
+            },
+            handler=self._handle_get_gbs_tours,
+        )
+        self._register(
+            name="reschedule_tour",
+            description=(
+                "Reschedules a GBS tour to a new date and time. "
+                "Requires the tour ID and the new datetime. "
+                "Always confirm details with the user before calling this tool."
+            ),
+            parameters={
+                "tour_id": {
+                    "type": "string",
+                    "description": "The tour ID to reschedule",
+                },
+                "new_datetime": {
+                    "type": "string",
+                    "description": "New date and time in ISO 8601 format (e.g. 2026-05-28T14:30:00Z)",
+                },
+            },
+            handler=self._handle_reschedule_tour,
+        )
+        # MILESTONE 3 — uncomment when implemented:
+        # self._register(
+        #     name="lookup_student",
+        #     description="Look up a student by name...",
+        #     parameters={"student_name": {"type": "string", "description": "..."}},
+        #     handler=self._handle_lookup_student,
+        # )
+
+    def _register(self, name: str, description: str, parameters: dict, handler):
+        """
+        Register a single tool.
+
+        name        — tool name Claude will use to call it
+        description — what this tool does and when to use it (Claude reads this)
+        parameters  — dict of parameter_name → {type, description} for required inputs
+        handler     — the method to call when this tool is invoked
+                      signature: handler(tool_input: dict) -> str
+        """
+        required_params = list(parameters.keys())
+        self._tools[name] = {
+            "definition": {
+                "name": name,
+                "description": description,
+                "input_schema": {
+                    "type": "object",
+                    "properties": parameters,
+                    "required": required_params,
+                },
+            },
+            "handler": handler,
+        }
+
     def _get_tools(self) -> list:
-        """Define tools for Claude to use."""
-        return [
-            {
-                "name": "get_todays_gbs_tours",
-                "description": (
-                    "Fetches today's GBS tour appointments from LineLeader. "
-                    "These are visits by prospective families who have not enrolled yet — "
-                    "not current students. Returns guardian name, child name and age, "
-                    "tour type (GBS or JR GBS), scheduled time, and assigned staff member."
-                ),
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            },
-            {
-                "name": "get_tour_details",
-                "description": "Get detailed information about a specific tour, including child names and ages",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "tour_id": {
-                            "type": "string",
-                            "description": "The tour ID (item_id from the session list)"
-                        }
-                    },
-                    "required": ["tour_id"]
-                }
-            },
-            {
-                "name": "reschedule_tour",
-                "description": "Reschedule a tour to a new date and time",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "tour_id": {
-                            "type": "string",
-                            "description": "The tour ID to reschedule"
-                        },
-                        "new_datetime": {
-                            "type": "string",
-                            "description": "New date and time in ISO 8601 format (e.g., 2026-05-28T14:30:00Z)"
-                        }
-                    },
-                    "required": ["tour_id", "new_datetime"]
-                }
-            },
-            {
-                "name": "get_todays_full_schedule",
-                "description": (
-                    "Fetches today's complete schedule: both GBS tours from LineLeader "
-                    "AND enrolled student class sessions from MyStudio (CREATE CODING, "
-                    "SCRATCH PLUS, JR, etc.), merged in chronological order. Use this "
-                    "whenever the user asks about today's schedule, what's happening "
-                    "today, students coming in, or anything that is not specifically "
-                    "limited to prospective family tours only."
-                ),
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
-        ]
+        """Return tool definitions for the LLM. Auto-populated from registry."""
+        return [entry["definition"] for entry in self._tools.values()]
 
     def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
         """
-        Execute a tool and return the result as a string.
-
-        This is where Milestone 1 functions are called.
+        Dispatch a tool call to its registered handler.
+        No if/elif chain needed — the registry handles routing.
         """
+        if tool_name not in self._tools:
+            logger.warning("Unknown tool requested: %s", tool_name)
+            return f"Unknown tool: {tool_name}. Available tools: {list(self._tools.keys())}"
         try:
-            if tool_name == "get_todays_gbs_tours":
-                return self._handle_get_todays_tours()
-            elif tool_name == "get_tour_details":
-                return self._handle_get_tour_details(tool_input)
-            elif tool_name == "reschedule_tour":
-                return self._handle_reschedule_tour(tool_input)
-            elif tool_name == "get_todays_full_schedule":
-                return self._handle_get_todays_full_schedule()
-            else:
-                return f"Unknown tool: {tool_name}"
-
+            return self._tools[tool_name]["handler"](tool_input)
         except Exception as e:
-            logger.error("Tool execution failed: %s", e)
-            return f"Error: {str(e)}"
+            logger.error("Tool execution failed: tool=%s error=%s", tool_name, e)
+            return f"Error running {tool_name}: {str(e)}"
 
-    def _handle_get_todays_tours(self) -> str:
-        """Get today's GBS tours."""
+    def _handle_get_gbs_tours(self, tool_input: dict) -> str:
+        """Get GBS tours for a specified date (defaults to today)."""
+        from datetime import date, datetime
+
+        date_str = tool_input.get("date", "").strip()
+
+        # Default to today if no date provided
+        if not date_str:
+            date_str = date.today().strftime("%Y-%m-%d")
+
+        try:
+            # Validate date format
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            return f"Invalid date format: '{date_str}'. Please use YYYY-MM-DD format (e.g., 2026-06-03)."
+
         try:
             if not self.bearer_token:
                 self.bearer_token = asyncio.run(get_bearer_token())
 
-            sessions = get_todays_sessions(self.bearer_token)
+            # Use the parameterized function for any date
+            from sites.lineleader.schedules import get_sessions_for_date
+            sessions = get_sessions_for_date(self.bearer_token, date_str)
             enrich_sessions_with_children(self.bearer_token, sessions)
 
             if not sessions:
-                return "No tours scheduled for today."
+                return f"No tours scheduled for {date_str}."
 
             # Format as readable text with item_id included so Claude can reference it
-            lines = [f"Tours for {sessions[0].date_display()}:\n"]
+            date_display = sessions[0].date_display() if sessions else date_str
+            lines = [f"Tours for {date_display}:\n"]
             for i, session in enumerate(sessions, 1):
                 children_str = ", ".join(session.child_display) if session.child_display else "(no children listed)"
                 lines.append(
@@ -287,42 +348,10 @@ Be concise and friendly. Staff are busy — get to the point."""
                 )
 
             result = "\n".join(lines)
-            result += "\n\n📥 **Download as Excel:** [Download this schedule](/api/export/tours)"
             return result
 
         except Exception as e:
-            raise RuntimeError(f"Failed to fetch tours: {e}")
-
-    def _handle_get_tour_details(self, tool_input: dict) -> str:
-        """Get details about a specific tour."""
-        tour_id = tool_input.get("tour_id", "")
-
-        try:
-            if not self.bearer_token:
-                self.bearer_token = asyncio.run(get_bearer_token())
-
-            sessions = get_todays_sessions(self.bearer_token)
-            enrich_sessions_with_children(self.bearer_token, sessions)
-
-            # Find the session by item_id
-            session = next((s for s in sessions if s.item_id == tour_id), None)
-            if not session:
-                return f"Tour {tour_id} not found in today's schedule."
-
-            lines = [
-                f"Tour Details:",
-                f"  ID: {session.item_id}",
-                f"  Time: {session.time_display()}",
-                f"  Guardian: {session.student_name}",
-                f"  Children: {', '.join(session.child_display) if session.child_display else 'Not available'}",
-                f"  Tour Type: {session.tour_type}",
-                f"  Assigned To: {session.assignee_name}",
-                f"  Location: {session.location_name}",
-            ]
-            return "\n".join(lines)
-
-        except Exception as e:
-            raise RuntimeError(f"Failed to get tour details: {e}")
+            raise RuntimeError(f"Failed to fetch tours for {date_str}: {e}")
 
     def _handle_reschedule_tour(self, tool_input: dict) -> str:
         """Reschedule a tour (calls Milestone 1's reschedule_tour function)."""
@@ -378,18 +407,34 @@ Be concise and friendly. Staff are busy — get to the point."""
         except Exception as e:
             return f"❌ OTP failed: {e}\n\nPlease check the code and try again."
 
-    def _handle_get_todays_full_schedule(self) -> str:
-        """Get today's full schedule (GBS tours + student appointments, merged and sorted)."""
+    def _handle_get_full_schedule(self, tool_input: dict) -> str:
+        """Get full schedule (GBS tours + student appointments) for a specified date (defaults to today)."""
+        from datetime import date, datetime
+
+        date_str = tool_input.get("date", "").strip()
+
+        # Default to today if no date provided
+        if not date_str:
+            date_str = date.today().strftime("%Y-%m-%d")
+
+        try:
+            # Validate date format
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            return f"Invalid date format: '{date_str}'. Please use YYYY-MM-DD format (e.g., 2026-06-03)."
+
         try:
             # Fetch GBS tours from LineLeader
+            from sites.lineleader.schedules import get_sessions_for_date
             ll_token = asyncio.run(get_bearer_token())
-            gbs_sessions = get_todays_sessions(ll_token)
+            gbs_sessions = get_sessions_for_date(ll_token, date_str)
             enrich_sessions_with_children(ll_token, gbs_sessions)
 
             # Fetch student appointments from MyStudio
             appointments = []
             try:
-                appointments = get_todays_appointments()
+                from sites.mystudio.schedules import get_appointments_for_date
+                appointments = get_appointments_for_date(date_str)
             except MystudioOTPRequired:
                 self._awaiting_mystudio_otp = True
                 return (
@@ -398,7 +443,7 @@ Be concise and friendly. Staff are busy — get to the point."""
                     "Please check your email and reply with the **6-digit code** to continue."
                 )
             except Exception as e:
-                logger.warning("Failed to fetch MyStudio appointments: %s", e)
+                logger.warning("Failed to fetch MyStudio appointments for %s: %s", date_str, e)
                 appointments = []
 
             # Cache for Excel export (avoids double API calls)
@@ -408,9 +453,11 @@ Be concise and friendly. Staff are busy — get to the point."""
             # Format unified schedule
             formatted = format_unified_schedule(gbs_sessions, appointments)
 
+            if not formatted or (not gbs_sessions and not appointments):
+                return f"No schedule found for {date_str}."
+
             result = formatted
-            result += "\n\n📥 **Download as Excel:** [Download this schedule](/api/export/tours)"
             return result
 
         except Exception as e:
-            raise RuntimeError(f"Failed to fetch full schedule: {e}")
+            raise RuntimeError(f"Failed to fetch full schedule for {date_str}: {e}")
