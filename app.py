@@ -257,6 +257,23 @@ def index():
                 cursor: pointer;
             }
 
+            .excel-btn {
+                display: inline-block;
+                margin-top: 10px;
+                padding: 6px 14px;
+                background: #1D6F42;
+                color: white !important;
+                text-decoration: none !important;
+                border-radius: 5px;
+                font-size: 13px;
+                font-weight: 500;
+                cursor: pointer;
+            }
+
+            .excel-btn:hover {
+                background: #155235;
+            }
+
             .bubble table {
                 margin: 8px 0;
                 border-collapse: collapse;
@@ -452,6 +469,19 @@ def index():
             return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
         }
 
+        function addExcelButtonIfSchedule(responseText, bubbleElement) {
+            // Match time patterns (e.g. "3:00 PM") or tour IDs as strong signals actual data was returned
+            const hasScheduleData = /\d+:\d{2}\s*(AM|PM)/i.test(responseText) ||
+                                    /\[ID:\s*\d+\]/.test(responseText);
+            if (!hasScheduleData) return;
+            const btn = document.createElement('a');
+            btn.href = '/api/export/tours';
+            btn.className = 'excel-btn';
+            btn.textContent = '📥 Download as Excel';
+            bubbleElement.appendChild(document.createElement('br'));
+            bubbleElement.appendChild(btn);
+        }
+
         function sendMessage() {
             const input = document.getElementById('message');
             const button = document.getElementById('sendBtn');
@@ -500,6 +530,7 @@ def index():
                     const assistantBubble = document.createElement('div');
                     assistantBubble.className = 'bubble';
                     assistantBubble.innerHTML = parseMarkdownLinks(data.response);
+                    addExcelButtonIfSchedule(data.response, assistantBubble);
                     assistantMsg.appendChild(assistantBubble);
                     chat.appendChild(assistantMsg);
                 }

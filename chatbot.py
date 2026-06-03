@@ -80,7 +80,7 @@ class ChatbotEngine:
         while True:
             response_data = self.provider.call(
                 messages=self.conversation_history,
-                system_prompt=self._get_system_prompt() + self._get_tool_instructions(),
+                system_prompt=self._get_system_prompt(),
                 tools=self._get_tools(),
             )
 
@@ -178,25 +178,6 @@ SAFETY RULES — non-negotiable:
   or proceed.
 
 Be concise and friendly. Staff are busy — get to the point."""
-
-    def _get_tool_instructions(self) -> str:
-        """TOOL REQUIREMENTS - What tools MUST do in their responses."""
-        return """
-TOOL OUTPUT REQUIREMENTS:
-
-When a tool returns schedule data (tours or classes):
-  • YOU MUST ALWAYS include the Excel download link at the end
-  • Format: "📥 **Download as Excel:** [Download this schedule](/api/export/tours)"
-  • This is NOT optional - every schedule response must have it
-
-When a tool returns a single tour/class detail:
-  • Include relevant parent/student contact info
-  • Keep format concise (1-3 lines)
-
-When a tool execution fails:
-  • Report the specific error to the user
-  • Do NOT attempt workarounds
-  • Suggest the user try again or provide more specific input"""
 
     def _register_tools(self):
         """
