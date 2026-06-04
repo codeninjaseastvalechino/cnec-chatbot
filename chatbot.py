@@ -426,10 +426,11 @@ Be concise and friendly. Staff are busy — get to the point."""
             return f"Invalid date format: '{date_str}'. Please use YYYY-MM-DD format (e.g., 2026-06-03)."
 
         try:
-            # Fetch GBS tours from LineLeader
+            # Fetch GBS tours from LineLeader (reuse cached token)
             from sites.lineleader.schedules import get_sessions_for_date
-            ll_token = asyncio.run(get_bearer_token())
-            gbs_sessions = get_sessions_for_date(ll_token, date_str)
+            if not self.bearer_token:
+                self.bearer_token = asyncio.run(get_bearer_token())
+            gbs_sessions = get_sessions_for_date(self.bearer_token, date_str)
             enrich_sessions_with_children(ll_token, gbs_sessions)
 
             # Fetch student appointments from MyStudio

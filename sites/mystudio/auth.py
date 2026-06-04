@@ -44,19 +44,34 @@ class MystudioOTPRequired(Exception):
 # Holds the partial session while waiting for user to enter OTP
 _pending_session: Optional[requests.Session] = None
 
+# In-memory session cache — built once, reused across all queries until the
+# process restarts or cookies expire. Avoids rebuilding the session + running
+# the 3 warmup API calls on every schedule fetch.
+_active_session: Optional[requests.Session] = None
+
 
 def get_session() -> requests.Session:
     """
     Return an authenticated requests.Session with valid MyStudio cookies.
 
-    If cookies are cached (30 days), returns immediately.
-    If not, triggers OTP email and raises MystudioOTPRequired.
-    Caller must catch MystudioOTPRequired and call complete_otp_login(otp) later.
+    Returns the same in-memory session on repeat calls within the same process —
+    no file I/O, no warmup calls, no new TCP handshake.
+
+    If no session exists yet (first call or process restart), loads from the
+    30-day cookie cache. If cookies are absent or expired, triggers OTP email
+    and raises MystudioOTPRequired.
     """
+    global _active_session
+
+    if _active_session is not None:
+        logger.debug("Reusing in-memory MyStudio session")
+        return _active_session
+
     cached = _load_cached_cookies()
     if cached:
         logger.info("Using cached MyStudio cookies (30-day cache)")
-        return _build_session_from_cookies(cached)
+        _active_session = _build_session_from_cookies(cached)
+        return _active_session
 
     # No cache — start login flow (triggers OTP email)
     logger.info("No valid cached cookies — starting fresh login")
@@ -117,10 +132,13 @@ def complete_otp_login(otp: str) -> requests.Session:
     if data.get("status") != "Success":
         raise Exception(f"OTP incorrect: {data.get('msg')}")
 
+    global _active_session
+
     session = _pending_session
     _pending_session = None
 
     _save_cached_cookies(dict(session.cookies))
+    _active_session = session
     logger.info("MyStudio login complete, cookies cached for 30 days")
     return session
 

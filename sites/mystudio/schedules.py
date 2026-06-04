@@ -86,10 +86,13 @@ def get_appointments_for_date(date_str: str) -> List[StudentAppointment]:
     """
     logger.info("Fetching MyStudio schedule for %s", date_str)
 
+    from sites.mystudio.auth import _active_session as _cached_ms_session
     session = get_session()
 
-    # Step 0: Initialize session with required endpoints (from browser capture)
-    _initialize_session(session)
+    # Step 0: Initialize session with required warmup endpoints (from browser capture).
+    # Only needed on first use — skipped when reusing the in-memory session.
+    if _cached_ms_session is None:
+        _initialize_session(session)
 
     # Step 1: Get class schedule (time slots)
     schedule = _get_class_schedule(session, date_str)
