@@ -8,7 +8,7 @@ Run from the project root:
 
 What it does:
   1. Checks for a cached Bearer token (skips login if still valid)
-  2. If no valid token: launches Playwright, logs in, extracts Bearer token
+  2. If no valid token: runs OAuth2 PKCE login flow (pure requests, no browser)
   3. Calls the ChildCareCRM API directly with the token
   4. Enriches sessions with child names, ages, and GBS vs JR GBS type
   5. Displays today's GBS Tours in a formatted table

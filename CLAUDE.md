@@ -33,7 +33,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 | Task | Command | Notes |
 |------|---------|-------|
-| **Setup** | `pip install -r requirements.txt && playwright install chromium` | One-time only |
+| **Setup** | `pip install -r requirements.txt` | One-time only (no Playwright needed) |
 | **CLI (Milestone 1)** | `python3 run_milestone1.py` | Show/reschedule tours, real LineLeader data |
 | **Web UI (mock)** | `TEST_MODE=true python3 app.py` | Zero API costs, instant feedback |
 | **Web UI (real)** | `python3 app.py` | Uses Claude API + LineLeader data |
@@ -54,7 +54,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | **MyStudio OTP cookie expires silently** | App hangs on second run after 30 days | App auto-prompts for OTP, just enter 6-digit code from email |
 | **LineLeader token cached for ~1 hour** | Stale data if run after hour-long pause | Safe: 5-min buffer auto re-logins before expiry. Manual: `rm browser_state/lineleader_token.json` |
 | **Mock mode is instant, real mode is not** | Expectations mismatch during dev→prod switch | Mock mode: <10ms responses. Claude mode: ~500-800ms per query |
-| **Playwright needs chromium** | "no suitable image found" error on first run | Run: `playwright install chromium --with-deps` (one-time) |
+| **LineLeader login uses PKCE** | If login hangs, clear the token cache | Run: `rm -f browser_state/lineleader_token.json` (no browser needed) |
 | **Python 3.9 type hints** | Import errors on newer syntax | Always use `Optional[str]` not `str \| None`, `List[X]` not `list[X]` |
 
 ---
@@ -86,7 +86,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ## Current Status
 
-**Last updated: 2026-06-02**
+**Last updated: 2026-06-03**
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
@@ -96,6 +96,20 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | 4 — Move / create / cancel appointments | ⬜ Not started | Post-Milestone 3 |
 | 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete | Web UI + multi-provider LLM (Claude/Ollama) |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started | Backlog |
+
+### Session 2026-06-03 — Cloud prep + observability
+
+**Changes made:**
+- ✅ **Playwright removed** — LineLeader login is now pure `requests` OAuth2 PKCE flow (ADR-007). No browser, no Chromium install. Cloud-deployable.
+- ✅ **Richer chatbot logging** — each query now logs: user query text, tool name + inputs, tool duration, total request duration, response size
+- ✅ **MyStudio schedule logging** — logs non-empty slot count and total roster-fetch time
+- ✅ **`analytics.py`** — new query analytics module writing to `logs/query_analytics.jsonl`:
+  - `top_intents()` — groups by tool + date bucket (today/tomorrow/future/past) — immune to spelling/phrasing variants
+  - `top_tools()` — raw tool call frequency
+  - `top_queries()` — raw query text (useful for UX copy decisions)
+  - `recent()` — last N entries
+- ✅ **`GET /api/analytics`** — new endpoint exposing all analytics data as JSON
+- ✅ **Quick-query path designed** — `query_type` field in analytics log supports "natural_language" vs "quick_query" for future shortcut buttons that bypass Claude
 
 ### Milestone 2 — Complete (2026-06-02)
 
@@ -153,13 +167,16 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ### Milestone 5 — Chat UI + Multi-Provider Claude API with Function Calling
 - **`llm_provider.py`** — Multi-provider abstraction (Claude, Ollama, extensible for others)
-- `app.py` — Flask web server on port 5001 (routes: GET `/`, POST `/api/chat`, GET `/api/audit-log`, GET `/api/export/tours`)
+- `app.py` — Flask web server on port 5001
+  - Routes: GET `/`, POST `/api/chat`, GET `/api/audit-log`, GET `/api/export/tours`, GET `/api/analytics`
   - Instantiates provider based on `LLM_PROVIDER` env var (defaults to Claude)
-  - Passes provider to ChatbotEngine
-- `chatbot.py` — ChatbotEngine class (provider-agnostic) with agentic loop and three tools:
-  - `get_todays_gbs_tours` — fetch today's tours from LineLeader
-  - `get_tour_details` — get details for a specific tour
+- `chatbot.py` — ChatbotEngine class (provider-agnostic) with agentic loop and tools:
+  - `get_full_schedule` — unified LineLeader + MyStudio schedule for any date
+  - `get_gbs_tours` — GBS tours only (LineLeader) for any date
   - `reschedule_tour` — reschedule a tour to new time
+  - Logs: user query, tool name + inputs, tool duration, total request time
+  - Writes one entry per query to `logs/query_analytics.jsonl`
+- `analytics.py` — Query analytics: `top_intents()`, `top_tools()`, `top_queries()`, `recent()`
 - `mock_chatbot.py` — MockChatbotEngine for testing without API costs (activated with `TEST_MODE=true`)
 - `test_chatbot.py` — Interactive CLI chatbot test harness (works with any provider)
 - `format_tours.py` — Format tour data as nested bullets with emojis
@@ -278,27 +295,33 @@ cnec-chatbot/
 ├── format_tours.py                  ← Milestone 5: Format as nested bullets + emojis
 ├── export_tours.py                  ← Milestone 5: Generate Excel files
 ├── audit_log.py                     ← Milestone 5: JSON audit logging
+├── analytics.py                     ← Query analytics (top_intents, top_tools, recent)
 ├── requirements.txt
 ├── config/
 │   └── settings.py                  ← ALL config lives here
 ├── core/
 │   └── logger.py                    ← shared structured JSON logging
 ├── sites/
-│   └── lineleader/
-│       ├── auth.py                  ← login + Bearer token management
-│       └── schedules.py             ← API calls, session parsing, reschedule
+│   ├── lineleader/
+│   │   ├── auth.py                  ← Playwright-free OAuth2 PKCE login (pure requests)
+│   │   └── schedules.py             ← ChildCareCRM API calls, parsing, reschedule
+│   └── mystudio/
+│       ├── auth.py                  ← Cookie-based session auth + OTP 2FA
+│       ├── schedules.py             ← Class schedule + student roster fetching
+│       └── appointments.py          ← StudentAppointment data structure
 ├── asset/
 │   └── cnec-logo.jpeg               ← Code Ninjas Eastvale Chino logo
 ├── logs/
-│   ├── cnec_chatbot.log             ← structured JSON logs
-│   └── audit.jsonl                  ← audit trail (one JSON object per line)
+│   ├── cnec_chatbot.log             ← structured JSON logs (operations)
+│   ├── audit.jsonl                  ← audit trail: every user message + response
+│   └── query_analytics.jsonl        ← query analytics: tool calls, timing, intents
 ├── exports/                         ← Excel files saved here
 └── browser_state/
-    └── lineleader_token.json        ← cached Bearer token + expiry
+    ├── lineleader_token.json        ← cached Bearer token + expiry (~1 hour)
+    └── mystudio_cookies.json        ← cached session cookies (30-day expiry)
 ```
 
 Future milestones add:
-- `sites/mystudio/` — MyStudio automation (Milestone 2)
 - `sites/homebase/` — Homebase API (Milestone 3)
 
 ---
@@ -529,15 +552,13 @@ changed, why, and what was ruled out.
 
 ---
 
-### ADR-001 — Playwright for browser automation
-**Date:** May 2026 | **Milestone:** 1
+### ADR-001 — Playwright for browser automation (superseded)
+**Date:** May 2026 | **Milestone:** 1 | **Superseded by ADR-007**
 
-**Decision:** Use Playwright (not Selenium) for all browser automation.
+**Original decision:** Use Playwright for login — OAuth2 PKCE flow was believed
+to require a real browser for CSRF tokens and code challenge handling.
 
-**Reason:** API interception is first-class in Playwright. Session caching
-(storage_state) is built in. Native async support. Cross-platform Mac + Windows.
-
-**Ruled out:** Selenium (no native interception), Puppeteer (Python wrapper is unstable).
+**Superseded:** ADR-007 replaced this with pure requests.
 
 ---
 
@@ -552,26 +573,14 @@ XHR/fetch API calls to capture JSON responses.
 ---
 
 ### ADR-003 — Hybrid: Playwright login → direct requests for all API calls
-**Date:** May 2026 | **Milestone:** 1
+**Date:** May 2026 | **Milestone:** 1 | **Superseded by ADR-007**
 
 **Decision:** Use Playwright ONLY for login. Extract Bearer JWT from the
 `/api/v3/sso/login` response. Use Python `requests` for all subsequent API calls.
 
-**What triggered this:** Live site inspection revealed LineLeader is actually
-ChildCareCRM and exposes a full REST API at `live.childcarecrm.com/api/v3/`.
-No need to keep a browser open for data fetching.
+**Superseded:** Login no longer requires Playwright. See ADR-007.
 
-**Why Playwright is still needed for login:** The login uses OAuth2 PKCE with
-server-generated CSRF tokens and cryptographic code challenges across a
-multi-step redirect chain. Cannot be replicated with raw requests reliably.
-
-**Why this is better than pure interception:**
-- No browser sitting open waiting for page loads
-- API calls don't depend on UI navigation or DOM structure
-- Easy to add date filters, pagination, etc.
-- Much easier to test and debug
-
-**Token lifecycle:**
+**Token lifecycle (still applies):**
 - Bearer JWT expires ~1 hour (parsed from JWT exp claim)
 - Cached to browser_state/lineleader_token.json with expiry
 - On each run: load from cache if valid, re-login only when expired
@@ -603,6 +612,31 @@ from .env. Zero hardcoded values in site modules.
 
 **To deploy for another Code Ninjas center:** update .env and IDs in
 settings.py only. No other files need changes.
+
+---
+
+### ADR-007 — Playwright-free LineLeader login (pure requests OAuth2 PKCE)
+**Date:** June 2026 | **Milestone:** 1 (cloud deployment prep)
+
+**Decision:** Replace Playwright login with a pure `requests` OAuth2 PKCE flow.
+Removes Chromium dependency entirely — app is now deployable to any standard
+Python cloud host.
+
+**How it works (4 steps, all pure requests):**
+1. GET `https://login.lineleader.com/authorize?client_id=enroll&...` → sets PHPSESSID
+2. GET `https://login.lineleader.com/login?from=enroll` → extract `_csrf_token` from server-rendered HTML hidden field
+3. POST credentials (`_csrf_token`, `_username`, `_password`) → 302 redirect chain → callback URL `https://my.childcarecrm.com/#/code?code=...`
+4. POST `https://live.childcarecrm.com/api/v3/sso/login` with `{code, code_verifier}` → Bearer JWT
+
+**Key discoveries:**
+- `login.lineleader.com` is PHP/Symfony — login page HTML contains a server-rendered CSRF token hidden field
+- `client_id` is `"enroll"`, redirect URI is `https://my.childcarecrm.com/#/code`
+- Token exchange endpoint is `POST /api/v3/sso/login` with `{code, code_verifier}`
+- The PKCE math (SHA256 + base64url) is standard and trivial in Python
+
+**Why Playwright was originally kept:** The original note said "Cannot be replicated with raw requests reliably" — this was overly conservative. The CSRF token is server-rendered in HTML, not JS-generated.
+
+**Impact:** `playwright` removed from `requirements.txt`. No `playwright install chromium` step needed.
 
 ---
 
@@ -837,21 +871,20 @@ source .venv/bin/activate  # or: .venv\Scripts\activate on Windows
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Install Playwright browsers
-playwright install chromium
-
-# 5. Create .env from template
+# 4. Create .env from template
 cp .env.example .env
 # Edit .env and fill in LINELEADER_USERNAME, LINELEADER_PASSWORD, etc.
 ```
+
+> **No Playwright install needed.** LineLeader login uses a pure requests OAuth2
+> PKCE flow — no browser required (ADR-007).
 
 ### Dependency Versions
 
 Listed in `requirements.txt` with version constraints (>=). Pinned versions only if stability issues arise.
 
 ```
-playwright>=1.44.0    # browser automation (login only)
-requests>=2.31.0      # direct API calls (data fetching)
+requests>=2.31.0      # all HTTP calls — LineLeader login + API, MyStudio API
 python-dotenv>=1.0.0  # .env loading
 anthropic>=0.25.0     # Claude API (Milestone 5 web UI)
 flask>=3.0.0          # web server (Milestone 5)
@@ -859,6 +892,7 @@ openpyxl>=3.1.0       # Excel export (Milestone 5)
 apscheduler>=3.10.0   # scheduled runs (Milestone 6 — future)
 rich>=13.7.0          # terminal output formatting
 openai>=1.0.0         # OpenAI SDK (Ollama compatibility)
+# NOTE: playwright removed (ADR-007) — login is pure requests OAuth2 PKCE
 ```
 
 ### Dependency Management
@@ -872,11 +906,6 @@ pip install --upgrade -r requirements.txt
 pip install --upgrade anthropic
 ```
 
-**Playwright version note:** If you encounter browser automation issues, reinstall:
-```bash
-playwright install chromium --with-deps
-```
-
 ### First-Time Setup Checklist
 
 Before running any milestone, verify this checklist:
@@ -884,7 +913,6 @@ Before running any milestone, verify this checklist:
 - [ ] Python 3.9 confirmed: `python3 --version`
 - [ ] Virtual environment created and activated: `source .venv/bin/activate`
 - [ ] Dependencies installed: `pip install -r requirements.txt`
-- [ ] Playwright browsers installed: `playwright install chromium`
 - [ ] `.env` file created from `.env.example`
 - [ ] Required credentials filled in: `LINELEADER_USERNAME`, `LINELEADER_PASSWORD`, `ANTHROPIC_API_KEY` (for Claude mode)
 - [ ] Token cache cleared (fresh login): `rm -f browser_state/*.json`
@@ -902,7 +930,7 @@ Before running any milestone, complete "Dependencies & Setup" above (one-time).
 Verify setup:
 ```bash
 source .venv/bin/activate
-python3 -c "import playwright; import requests; import anthropic; print('✅ Setup OK')"
+python3 -c "import requests; import anthropic; import flask; print('✅ Setup OK')"
 ```
 
 ---
@@ -1064,21 +1092,17 @@ logger.error("API call failed: %s", error_msg)
 
 ---
 
-### Debug Mode — Watch the Playwright Browser Login
-Edit `config/settings.py`:
-```python
-BROWSER_HEADLESS: bool = False  # Default is True
-```
+### Debug Mode — Trace the LineLeader Login
+Login is pure `requests` (no browser). To trace what's happening:
 
-Run as usual:
 ```bash
-python3 run_milestone1.py
+# Watch the auth log in real time
+tail -f logs/cnec_chatbot.log | jq 'select(.module == "sites.lineleader.auth")'
+
+# Or add a one-off print to auth.py _follow_to_callback() to dump each redirect URL
 ```
 
-A Chrome window will appear showing the login flow. Useful for:
-- Confirming OAuth2 PKCE flow completes
-- Checking for form selector changes
-- Diagnosing login errors visually
+Useful for diagnosing CSRF token extraction failures or redirect chain changes.
 
 ---
 
@@ -1091,13 +1115,12 @@ A Chrome window will appear showing the login flow. Useful for:
 1. Verify `.env` has correct `LINELEADER_USERNAME` and `LINELEADER_PASSWORD`
 2. Check credentials manually in a browser at `https://my.childcarecrm.com`
 3. Clear token cache: `rm -f browser_state/lineleader_token.json`
-4. Enable debug mode (`BROWSER_HEADLESS=False`) to watch the login flow
-5. Check `logs/cnec_chatbot.log` for `"level": "ERROR"` entries in `sites.lineleader.auth`
+4. Check `logs/cnec_chatbot.log` for `"level": "ERROR"` entries in `sites.lineleader.auth`
 
 **Common issues:**
-- Password changed — update `.env`
+- Password changed — update `.env` and clear token cache
 - Account locked after failed attempts — wait 5 min, try again
-- Playwright version mismatch — run `playwright install chromium`
+- CSRF token extraction fails — login page HTML may have changed; check `_csrf_token` field name in the form
 
 ---
 

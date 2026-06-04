@@ -1,173 +1,124 @@
 # CNEC Chatbot
 
-AI-powered automation agent for **Code Ninjas Eastvale Chino** that manages GBS Tour scheduling through natural language. Choose between a **CLI tool** (Milestone 1) or a **web chat interface** (Milestone 5) — both powered by the same LineLeader API.
-
-| Platform | Purpose |
-|----------|---------|
-| LineLeader / ChildCareCRM | GBS Tour schedule, reschedule, details |
-| MyStudio | Full daily schedule, student lookup *(Milestone 2 — coming soon)* |
-| Homebase | Employee schedule *(Milestone 3 — coming soon)* |
+AI-powered scheduling assistant for **Code Ninjas Eastvale Chino**. Staff ask questions in plain English and the chatbot pulls live data from LineLeader and MyStudio — no logging into multiple systems, no copy-pasting.
 
 ---
 
-## Setup (5 minutes)
+## What It Does
 
-### 1. Clone and install
+**Ask anything about the schedule in natural language:**
+
+> *"Show me today's schedule"*
+> *"Any GBS tours on Friday?"*
+> *"Who's coming in tomorrow?"*
+> *"Reschedule the 3pm tour to 4:30"*
+> *"Download today's schedule as Excel"*
+
+The chatbot figures out which system to query (or both), fetches the data, and presents it in a clean, readable format. You can also download any schedule as an Excel file in one click.
+
+---
+
+## What It Connects To
+
+| Platform | What We Get |
+|----------|-------------|
+| **LineLeader / ChildCareCRM** | GBS & JR GBS tour appointments — prospective families visiting the center |
+| **MyStudio** | Enrolled student class sessions — CREATE CODING, SCRATCH PLUS, JR, etc. |
+| **Homebase** | Employee schedule *(planned — not yet built)* |
+
+Both LineLeader and MyStudio data appear in a single unified, time-ordered view.
+
+---
+
+## How to Run
+
+### Setup (one time)
 ```bash
 git clone https://github.com/codeninjaseastvalechino/cnec-chatbot.git
 cd cnec-chatbot
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-playwright install chromium
-```
-
-### 2. Create `.env` with credentials
-```bash
 cp .env.example .env
-# Edit .env and add:
-# LINELEADER_USERNAME=...
-# LINELEADER_PASSWORD=...
-# ANTHROPIC_API_KEY=...  (for web UI only)
+# Edit .env — add credentials (see below)
 ```
 
-### 3. Verify LineLeader credentials work
+### Credentials needed in `.env`
+```
+LINELEADER_USERNAME=venay.bhatia@codeninjas.com
+LINELEADER_PASSWORD=your_password
+MYSTUDIO_USERNAME=eastvalechinocodeninjas@gmail.com
+MYSTUDIO_PASSWORD=your_password
+ANTHROPIC_API_KEY=sk-ant-...   # only needed for web UI
+```
+
+### Start the web UI
 ```bash
-python3 run_milestone1.py
-```
-
-You should see today's GBS tours in a table.
-
----
-
-## Run
-
-### Milestone 1: CLI Tool (No API Costs)
-
-```bash
-python3 run_milestone1.py
-```
-
-**What it does:**
-- Logs in to LineLeader (token cached ~1 hour)
-- Shows today's GBS Tours in a formatted table
-- Parent name, children (with ages), tour type, assigned staff
-- Optionally reschedule by tour number or name
-
-**Example:**
-```
-Today's GBS Tours — Friday, May 29, 2026
-╭──────┬────────────┬────────────────────────┬──────────────┬───────────────────
-│    # │ Time       │ Student                │ Tour Type    │ Child
-├──────┼────────────┼────────────────────────┼──────────────┼───────────────────
-│    1 │ 11:30 AM   │ Venay Bhatia           │ GBS          │
-│    2 │ 3:00 PM    │ Kira Holland           │ JR GBS       │ Vaia Holland (6y)
-│    3 │ 3:00 PM    │ Shabnam Moosajee       │ JR GBS       │ Aaliyah Moosajee (6y)
-│    4 │ 4:00 PM    │ Erika Cuevas           │ GBS          │ Isaac Camargo (11y)
-│    5 │ 4:30 PM    │ Eva Chen               │ GBS          │ Henry Jiao (13y)
-│    6 │ 5:30 PM    │ Vashisth Thaker        │ GBS          │ Viyaan Thaker (7y)
-```
-
----
-
-### Milestone 5: Web Chat UI (Uses Claude API)
-
-```bash
-# Real mode (uses Claude API + LineLeader data)
+# Real mode — live data, uses Claude API (~$0.001–0.005 per query)
 python3 app.py
 
-# Test mode (mock data, no API costs — great for development)
+# Test mode — instant mock data, no API costs (good for UI work)
 TEST_MODE=true python3 app.py
 ```
 
-**What it does:**
-- Starts Flask server on `http://localhost:5001`
-- Code Ninjas branded chat UI with logo and colors
-- Ask Claude in natural language about tours
-- Claude uses function calling to execute operations
-- Download schedules as Excel files
+Open **http://localhost:5001** in any browser.  
+Access from other devices on the same WiFi: **http://\<your-mac-ip\>:5001**
 
-**Example chat:**
-```
-You: "Show me today's tours"
-
-Claude:
-📅 Friday, May 29
-  ⏰ 11:30 AM
-    👨‍👩‍👧 Venay Bhatia
-    🎮 GBS
-  ⏰ 3:00 PM
-    👨‍👩‍👧 Kira Holland
-    👧 Vaia Holland (6y)
-    🎮 JR GBS
-
-[... more tours ...]
-
-📥 **Download as Excel:** [Download this schedule](/api/export/tours)
-```
-
-**What you can ask:**
-- "What tours are scheduled today?"
-- "Tell me about the 3pm tour"
-- "Reschedule the 2pm tour to 4pm tomorrow"
-- "Show me only JR GBS tours"
-- "Download the schedule as Excel"
-
-**Accessible from other machines on your WiFi:**
-```
-http://<your-ip>:5001
-```
-
-### Finding Your IP Address
-
-**On Mac:**
+### CLI tool (LineLeader tours only, no API cost)
 ```bash
-hostname -I
-# or
-ifconfig | grep "inet 192"
+python3 run_milestone1.py
 ```
 
-Look for something like `192.168.x.x` (NOT `127.0.0.1` and NOT ending in `.255`)
+---
 
-**On Windows:**
-```bash
-ipconfig
-# Look for "IPv4 Address" under your WiFi network
+## Example Interaction
+
 ```
+You:  Show me today's full schedule
 
-### Mac Firewall Setup
+Bot:  📅 Wednesday, June 3, 2026
 
-If you get "connection refused" or times out from another machine:
+      🔵 GBS Tours (LineLeader)
+      ⏰ 5:00 PM — JR GBS
+        👨‍👩‍👧 Parent: Wittie Hughes
+        👧 Child: Journei Ashbourne (4y)
+        👤 Staff: Venay Bhatia
 
-1. **System Settings** → **Network** → **Firewall** → **Firewall Options**
-2. Click `+` button and add your Python installation:
-   ```
-   /Users/yourname/.venv/bin/python3
-   ```
-3. Allow the connection
+      🟢 Student Classes (MyStudio)
+      ⏰ 9:00 AM — CREATE CODING
+        • Alice Chen (Blue Belt) — Parent: Jennifer Chen
+        • Marcus Lee (White Belt) — Parent: David Lee
+        ... 4 more students
 
-Then try again from the other machine.
+      📥 Download as Excel → [Today's Schedule]
+```
 
 ---
 
 ## Features
 
-### CLI (Milestone 1)
-✅ Login to LineLeader with token caching  
-✅ Show today's GBS tours in formatted table  
-✅ Display parent, children (with ages), tour type, assigned staff  
-✅ Reschedule tours with confirmation  
-✅ Search/filter by name or number  
+### Right Now
+- ✅ Ask about any date — today, tomorrow, any specific date
+- ✅ GBS and JR GBS tours from LineLeader with child names and ages
+- ✅ Student class sessions from MyStudio with parent names, belt ranks, phone numbers
+- ✅ Unified schedule merging both systems in time order
+- ✅ Reschedule tours with confirmation before any write
+- ✅ Export any schedule to Excel (one click)
+- ✅ Multi-turn conversation — ask follow-ups naturally
+- ✅ Accessible from any machine on the same WiFi
+- ✅ Query analytics — tracks what's asked most to improve the UI over time
 
-### Web UI (Milestone 5)
-✅ Chat interface with Code Ninjas branding  
-✅ Natural language questions about tours  
-✅ Nested bullet format with emojis for readability  
-✅ Multi-turn conversation (ask follow-ups)  
-✅ Excel export with professional formatting  
-✅ Audit log of all interactions  
-✅ Test mode for development (no API costs)  
-✅ Accessible from any machine on same WiFi  
+### Authentication
+- **LineLeader:** Logs in automatically, token cached for ~1 hour
+- **MyStudio:** Cookie cached for 30 days — when it expires, the chatbot prompts for a 6-digit OTP (sent to the center email) directly in the browser chat
+
+### Planned
+- ⬜ Quick-query shortcut buttons (common queries that skip Claude entirely — faster, free)
+- ⬜ Student lookup by name
+- ⬜ Camp enrollment details
+- ⬜ Create / cancel appointments
+- ⬜ Employee schedule (Homebase)
+- ⬜ Cloud hosting (accessible from anywhere, not just same WiFi)
 
 ---
 
@@ -176,160 +127,57 @@ Then try again from the other machine.
 | Milestone | Feature | Status |
 |-----------|---------|--------|
 | 1 | LineLeader login + GBS tours + reschedule (CLI) | ✅ Complete |
-| 2 | MyStudio login + 2FA + full daily schedule | ⬜ Not started |
-| 3 | Student lookup + camp details | ⬜ Not started |
-| 4 | Move / create / cancel appointments | ⬜ Not started |
-| 5 | Chat UI + Claude API + function calling + Excel export | ✅ Complete |
-| 6 | Employee schedule generator | ⬜ Not started |
+| 2 | MyStudio login + unified schedule + Excel export | ✅ Complete |
+| 3 | Student lookup + camp details | ⬜ Planned |
+| 4 | Create / cancel / move appointments | ⬜ Planned |
+| 5 | Web chat UI + Claude API + function calling | ✅ Complete |
+| 6 | Employee schedule (Homebase) | ⬜ Backlog |
 
 ---
 
-## Project Structure
+## File Overview
 
 ```
 cnec-chatbot/
-├── README.md                 ← you are here
-├── CLAUDE.md                 ← full technical briefing (for developers)
-├── CNEC-Chatbot-Requirements.md
-├── .env.example              ← copy to .env and fill in credentials
+├── app.py              — Flask web server (the main thing to run)
+├── chatbot.py          — Claude API integration + tool routing
+├── analytics.py        — Tracks queries/tools for usage insights
+├── audit_log.py        — Full interaction log (every message)
+├── format_tours.py     — Formats schedule data as readable bullets
+├── export_tours.py     — Generates Excel files
 │
-├── Milestone 1 (CLI)
-├── run_milestone1.py         ← entry point: python3 run_milestone1.py
+├── sites/
+│   ├── lineleader/     — LineLeader / ChildCareCRM integration
+│   └── mystudio/       — MyStudio integration
 │
-├── Milestone 5 (Web UI)
-├── app.py                    ← Flask server + HTML/CSS/JS
-├── chatbot.py                ← Claude API integration with function calling
-├── mock_chatbot.py           ← Mock chatbot for testing (TEST_MODE=true)
-├── format_tours.py           ← Format tour data as nested bullets with emojis
-├── export_tours.py           ← Generate Excel files with formatting
-├── audit_log.py              ← JSON audit logging
-│
-├── Core
-├── requirements.txt
-├── config/
-│   └── settings.py           ← all center-specific config (org IDs, URLs)
-├── core/
-│   └── logger.py             ← structured JSON logging
-│
-├── Sites
-└── sites/
-    └── lineleader/
-        ├── auth.py           ← Playwright login + Bearer token management
-        └── schedules.py      ← ChildCareCRM API calls, parsing, reschedule
-│
-├── Output
-├── asset/
-│   └── cnec-logo.jpeg        ← Code Ninjas logo (web UI)
-├── logs/
-│   ├── cnec_chatbot.log      ← structured JSON logs
-│   └── audit.jsonl           ← audit trail (one JSON object per line)
-├── exports/                  ← Excel files saved here
-└── browser_state/
-    └── lineleader_token.json ← cached Bearer token + expiry
+├── config/settings.py  — All center-specific config (IDs, URLs)
+├── logs/               — Operation logs, audit trail, query analytics
+├── exports/            — Excel files land here
+└── browser_state/      — Cached auth tokens/cookies
 ```
-
----
-
-## Testing
-
-### Test Milestone 1 (no dependencies)
-```bash
-python3 run_milestone1.py
-```
-
-### Test Milestone 5 without API costs
-```bash
-TEST_MODE=true python3 app.py
-```
-
-Then navigate to `http://localhost:5001` and chat away. Uses mock tour data.
-
-### Test Milestone 5 with real API
-```bash
-python3 app.py
-```
-
-Requires valid `ANTHROPIC_API_KEY` in `.env`. Real LineLeader data.
 
 ---
 
 ## Troubleshooting
 
-### "Bearer token invalid" or login fails
-Your LineLeader credentials are stale or missing.
+**Login fails / no data**
 ```bash
-# Verify .env has credentials
-cat .env | grep LINELEADER
-
-# Test directly with Milestone 1
-python3 run_milestone1.py
-
-# Clear cached token and retry
-rm -f browser_state/lineleader_token.json
-python3 run_milestone1.py
+rm -f browser_state/lineleader_token.json   # clear cached token, force fresh login
+python3 run_milestone1.py                    # test LineLeader connection directly
 ```
 
-### "ANTHROPIC_API_KEY not set" (Milestone 5 only)
-Claude API can't authenticate.
-```bash
-# Check .env has your key
-cat .env | grep ANTHROPIC_API_KEY
+**MyStudio asks for OTP every time**
+That's expected when cookies expire (~30 days). Enter the 6-digit code from the center email in the chat. Cookies are then cached for another 30 days.
 
-# Verify environment is sourced
-echo $ANTHROPIC_API_KEY  # should print your key
+**"No tours today" but tours exist in LineLeader**
+Verify the date — the chatbot uses the system clock. You can ask explicitly: *"Show me tours for June 5"*
 
-# If empty, source again
-source .venv/bin/activate
-```
-
-### "No tours scheduled for today"
-Check the date and verify you have tours in LineLeader for today.
-```bash
-# Use Milestone 1 to verify
-python3 run_milestone1.py
-```
-
-### Playwright issues
-```bash
-# Reinstall Playwright
-playwright install chromium
-
-# Or use headless=false to see the browser (CLAUDE.md for details)
-```
+**Can't reach from another machine**
+Make sure Python is allowed through the Mac firewall:
+System Settings → Network → Firewall → Firewall Options → add `.venv/bin/python3`
 
 ---
 
-## Safety & Design
+## For Developers
 
-- ✅ **No hardcoded credentials** — everything in `.env`
-- ✅ **Confirmation before writes** — reschedule requires user approval
-- ✅ **Audit trail** — JSON logs of all interactions
-- ✅ **Token caching** — Bearer token cached ~1 hour (5-min safety buffer)
-- ✅ **Multi-tenant ready** — config-driven, easy to deploy for other centers
-
----
-
-## Documentation
-
-- **CLAUDE.md** — Full technical briefing for developers (architecture, APIs, decisions, debugging)
-- **CNEC-Chatbot-Requirements.md** — Complete product requirements
-
----
-
-## Next Steps
-
-**Milestone 2:** MyStudio integration
-- Login with 2FA
-- Full daily schedule (not just GBS tours)
-- Student details lookup
-
-**Milestone 3:** Homebase integration
-- Employee schedule
-- Shift publishing
-
-**Milestone 4:** Extended operations
-- Create new appointments
-- Cancel appointments
-- Move appointments
-
-See CLAUDE.md for architecture decisions and confirmed API endpoints for each site.
+Full technical docs — architecture decisions, API endpoints, auth flows, debugging — are in **[CLAUDE.md](CLAUDE.md)**.

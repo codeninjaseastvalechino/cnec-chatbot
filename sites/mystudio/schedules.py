@@ -8,6 +8,7 @@ Confirmed endpoints (from Playwright network capture 2026-05-31):
   POST /Api/PortalApi/getClassdatatabledetails - student roster per time slot
 """
 
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime, date
 from urllib.parse import urlencode
@@ -112,16 +113,18 @@ def get_appointments_for_date(date_str: str) -> List[StudentAppointment]:
                     "class_title": class_title,
                 })
 
-    logger.info("Found %d time slots across all classes", len(time_slots))
+    non_empty = [s for s in time_slots if int(s.get("reg_count", "0")) > 0]
+    logger.info(
+        "Found %d time slots across all classes (%d non-empty)",
+        len(time_slots), len(non_empty),
+    )
 
-    # Step 3: Fetch student roster for each time slot
+    # Step 3: Fetch student roster for each non-empty time slot
     seen_class_reg_ids = set()
     appointments = []
+    roster_start = time.monotonic()
 
-    for slot in time_slots:
-        if int(slot.get("reg_count", "0")) == 0:
-            continue  # Skip empty slots
-
+    for slot in non_empty:
         students = _get_slot_roster(session, slot["class_appointment_times_id"], date_str)
         for student in students:
             reg_id = student.get("class_reg_id", "")
@@ -134,7 +137,11 @@ def get_appointments_for_date(date_str: str) -> List[StudentAppointment]:
                 appointments.append(appt)
 
     appointments.sort(key=lambda a: a.start_time)
-    logger.info("Returning %d student appointments", len(appointments))
+    roster_elapsed = time.monotonic() - roster_start
+    logger.info(
+        "MyStudio done | %d appointments from %d slots | roster fetch: %.1fs",
+        len(appointments), len(non_empty), roster_elapsed,
+    )
     return appointments
 
 

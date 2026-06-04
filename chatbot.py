@@ -13,6 +13,7 @@ Handles:
 import json
 import os
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 from dotenv import dotenv_values
@@ -27,6 +28,7 @@ for key, value in env_vars.items():
 from core.logger import get_logger
 from config.settings import settings
 from llm_provider import get_provider
+from analytics import QueryAnalytics
 from sites.lineleader.auth import get_bearer_token
 from sites.lineleader.schedules import (
     get_todays_sessions,
@@ -49,6 +51,7 @@ class ChatbotEngine:
         self.conversation_history = []
         self.bearer_token = None
         self._awaiting_mystudio_otp = False
+        self._analytics = QueryAnalytics()
 
         # Tool registry: name → {definition, handler}
         # Add new tools via _register() in _register_tools() only
@@ -72,6 +75,10 @@ class ChatbotEngine:
         if self._awaiting_mystudio_otp:
             return self._handle_otp_submission(user_message)
 
+        logger.info("User query: %s", user_message[:120])
+        request_start = time.monotonic()
+        _tracker = self._analytics.start_query(user_message, query_type="natural_language")
+
         self.conversation_history.append({
             "role": "user",
             "content": user_message
@@ -84,8 +91,6 @@ class ChatbotEngine:
                 tools=self._get_tools(),
             )
 
-            logger.info("LLM response: type=%s", response_data["type"])
-
             # Check if LLM wants to use a tool
             if response_data["type"] == "tool_use":
                 tool_content = response_data["content"]
@@ -93,13 +98,26 @@ class ChatbotEngine:
                 tool_input = tool_content["input"]
                 tool_id = tool_content["id"]
 
+                logger.info(
+                    "Tool call: %s | inputs: %s",
+                    tool_name,
+                    json.dumps(tool_input),
+                )
+
                 # Notify user what we're doing
                 if status_callback:
                     status_msg = self._TOOL_STATUS.get(tool_name, f"Running {tool_name}...")
                     status_callback(status_msg)
 
-                # Execute the tool
+                # Execute the tool (with timing)
+                tool_start = time.monotonic()
                 tool_result = self._execute_tool(tool_name, tool_input)
+                tool_elapsed = time.monotonic() - tool_start
+                logger.info(
+                    "Tool done: %s | %.1fs | result: %d chars",
+                    tool_name, tool_elapsed, len(tool_result),
+                )
+                _tracker.record_tool(tool_name, tool_input, tool_elapsed)
 
                 # Add assistant's response to history
                 # For Claude: use the raw response blocks (required for proper tool_result matching)
@@ -134,6 +152,9 @@ class ChatbotEngine:
             # LLM is done — extract text response
             elif response_data["type"] == "end_turn":
                 text = response_data["content"]
+                total_elapsed = time.monotonic() - request_start
+                logger.info("Request complete | total: %.1fs | response: %d chars", total_elapsed, len(text or ""))
+                _tracker.finish(response_chars=len(text or ""))
 
                 # Add assistant's response to history
                 # For Claude: use the raw response blocks to maintain conversation structure
@@ -161,10 +182,7 @@ class ChatbotEngine:
 
     def _get_system_prompt(self) -> str:
         """System prompt: identity, safety, tone only."""
-        from datetime import date
-        today = date.today().strftime("%A, %B %d, %Y")
-        return f"""You are an operations assistant for Code Ninjas Eastvale Chino.
-Today is {today}.
+        return """You are an operations assistant for Code Ninjas Eastvale Chino.
 You help staff manage daily schedules, student appointments, and tours
 by querying the center's systems and taking action on their behalf.
 

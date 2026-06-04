@@ -20,9 +20,11 @@ from pathlib import Path
 from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 from datetime import datetime
 from audit_log import AuditLogger
+from analytics import QueryAnalytics
 
 app = Flask(__name__)
 audit = AuditLogger()
+analytics = QueryAnalytics()
 
 # Cache last fetched schedule for Excel export (avoid double API calls)
 _schedule_cache = {"gbs_sessions": [], "appointments": []}
@@ -592,6 +594,25 @@ def get_audit_log():
     try:
         entries = audit.read_log()
         return jsonify({"entries": entries})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/analytics", methods=["GET"])
+def get_analytics():
+    """
+    Query analytics — most common queries, most called tools, recent history.
+
+    GET /api/analytics             → full summary
+    GET /api/analytics?recent=50   → last 50 entries
+    """
+    try:
+        return jsonify({
+            "top_intents": analytics.top_intents(limit=10),
+            "top_tools":   analytics.top_tools(limit=10),
+            "top_queries": analytics.top_queries(limit=10),
+            "recent":      analytics.recent(limit=int(request.args.get("recent", 20))),
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

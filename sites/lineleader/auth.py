@@ -1,15 +1,19 @@
 """
 sites/lineleader/auth.py
 ========================
-LineLeader / ChildCareCRM authentication.
+LineLeader / ChildCareCRM authentication — Playwright-free.
 
-Strategy (ADR-003 — hybrid):
-  - Playwright handles login ONLY (OAuth2 PKCE with server-generated CSRF tokens
-    and cryptographic code challenges — cannot be replicated with raw requests)
-  - We intercept the POST /api/v3/sso/login response to extract the Bearer JWT
-  - Token is cached to browser_state/lineleader_token.json with expiry
-  - On each run: load from cache if valid, re-login only when expired
-  - 5-minute buffer before expiry prevents mid-session token death
+Strategy (replaces ADR-003 hybrid):
+  Pure requests OAuth2 PKCE flow:
+    1. GET /authorize  → PHPSESSID cookie
+    2. GET /login      → server-rendered CSRF token
+    3. POST /login     → credentials accepted, redirect chain begins
+    4. Follow redirects to callback URL on my.childcarecrm.com → auth code
+    5. POST /api/v3/sso/login with {code, code_verifier} → Bearer JWT
+
+  Token is cached to browser_state/lineleader_token.json with expiry.
+  On each run: load from cache if valid, re-login only when expired.
+  5-minute buffer before expiry prevents mid-session token death.
 
 Usage:
     from sites.lineleader.auth import get_bearer_token
@@ -17,29 +21,43 @@ Usage:
     # Returns e.g. "Bearer eyJ0eXAiOiJKV1Qi..."
 """
 
+import hashlib
 import json
 import os
+import re
 import base64
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from playwright.async_api import async_playwright, Page, Response
+import requests
 
 from config.settings import settings
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# How many minutes before expiry to treat the token as stale
 _TOKEN_BUFFER_MINUTES = 5
+
+_AUTHORIZE_URL = "https://login.lineleader.com/authorize"
+_LOGIN_URL = "https://login.lineleader.com/login"
+_SSO_LOGIN_URL = "https://live.childcarecrm.com/api/v3/sso/login"
+_REDIRECT_URI = "https://my.childcarecrm.com/#/code"
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:151.0) "
+        "Gecko/20100101 Firefox/151.0"
+    ),
+}
 
 
 async def get_bearer_token() -> str:
     """
     Return a valid Bearer token string for the ChildCareCRM API.
 
-    Loads from cache if still valid; otherwise launches Playwright to
-    log in and capture a fresh token.
+    Loads from cache if still valid; otherwise runs the OAuth2 PKCE login flow
+    using pure requests (no browser required).
 
     Returns:
         Bearer token string, e.g. "Bearer eyJ0eXAiOiJKV1Qi..."
@@ -55,37 +73,145 @@ async def get_bearer_token() -> str:
         logger.info("Cached token is valid — skipping login")
         return cached
 
-    logger.info("Starting fresh LineLeader login to obtain Bearer token")
-    token = await _login_and_capture_token()
-    return token
+    logger.info("Starting fresh LineLeader login (Playwright-free PKCE flow)")
+    return _login_and_capture_token()
+
+
+# ── OAuth2 PKCE login ─────────────────────────────────────────────────────────
+
+def _login_and_capture_token() -> str:
+    """
+    Run the full OAuth2 PKCE flow using requests, return a cached Bearer token.
+    """
+    session = requests.Session()
+    session.headers.update(_HEADERS)
+
+    # 1. Generate PKCE params
+    raw_verifier = os.urandom(32)
+    code_verifier = base64.urlsafe_b64encode(raw_verifier).rstrip(b"=").decode()
+    digest = hashlib.sha256(code_verifier.encode()).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    state = base64.urlsafe_b64encode(os.urandom(24)).rstrip(b"=").decode()
+
+    # 2. GET authorize → sets PHPSESSID, redirects to login page
+    auth_params = {
+        "client_id": "enroll",
+        "response_type": "code",
+        "scope": "openid",
+        "redirect_uri": _REDIRECT_URI,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "state": state,
+    }
+    session.get(_AUTHORIZE_URL + "?" + urllib.parse.urlencode(auth_params))
+    logger.debug("PHPSESSID obtained: %s", session.cookies.get("PHPSESSID"))
+
+    # 3. GET login page → extract server-rendered CSRF token
+    login_page = session.get(_LOGIN_URL + "?from=enroll")
+    csrf_match = re.search(
+        r'name="_csrf_token"\s+value="([^"]+)"', login_page.text
+    )
+    if not csrf_match:
+        raise RuntimeError("Could not extract CSRF token from LineLeader login page")
+    csrf_token = csrf_match.group(1)
+    logger.debug("CSRF token extracted")
+
+    # 4. POST credentials → triggers redirect chain ending at callback URL
+    resp = session.post(
+        _LOGIN_URL,
+        data={
+            "_csrf_token": csrf_token,
+            "_username": settings.LINELEADER_USERNAME,
+            "_password": settings.LINELEADER_PASSWORD,
+        },
+        allow_redirects=False,
+    )
+
+    auth_code = _follow_to_callback(session, resp)
+    if not auth_code:
+        raise RuntimeError(
+            "Login appeared to succeed but auth code was not captured. "
+            "Credentials may be wrong or the OAuth flow has changed."
+        )
+    logger.debug("Auth code captured")
+
+    # 5. Exchange code + verifier for Bearer JWT
+    token_resp = requests.post(
+        _SSO_LOGIN_URL,
+        json={"code": auth_code, "code_verifier": code_verifier},
+        headers={"Content-Type": "application/json", "X-UI-Request": "true"},
+    )
+    if token_resp.status_code != 200:
+        raise RuntimeError(
+            f"sso/login token exchange failed: {token_resp.status_code} {token_resp.text[:200]}"
+        )
+
+    data = token_resp.json()
+    raw_token = data.get("token") or data.get("access_token", "")
+    if not raw_token:
+        raise RuntimeError(f"No token in sso/login response: {data}")
+
+    bearer = f"Bearer {raw_token}"
+    expires_at = _parse_jwt_expiry(raw_token)
+    _save_token(bearer, expires_at)
+    logger.info(
+        "Bearer token obtained — expires at %s",
+        expires_at.astimezone().strftime("%H:%M:%S"),
+    )
+    return bearer
+
+
+def _follow_to_callback(
+    session: requests.Session, resp: requests.Response
+) -> Optional[str]:
+    """
+    Follow the redirect chain after credential POST until we reach the
+    my.childcarecrm.com callback URL. Returns the auth code or None.
+    """
+    for _ in range(8):
+        location = resp.headers.get("location", "")
+        if not location:
+            break
+
+        abs_location = (
+            location
+            if location.startswith("http")
+            else "https://login.lineleader.com" + location
+        )
+
+        parsed = urllib.parse.urlparse(abs_location)
+        if parsed.netloc == "my.childcarecrm.com":
+            # Code is in query string or in the fragment after '?'
+            qs = urllib.parse.parse_qs(parsed.query)
+            if not qs.get("code") and "?" in parsed.fragment:
+                qs = urllib.parse.parse_qs(parsed.fragment.split("?", 1)[1])
+            codes = qs.get("code", [])
+            return codes[0] if codes else None
+
+        resp = session.get(abs_location, allow_redirects=False)
+
+    return None
 
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 
 def _load_cached_token() -> Optional[str]:
-    """
-    Load token from cache file if it exists and is still valid
-    (with TOKEN_BUFFER_MINUTES buffer before expiry).
-    """
+    """Load token from cache if it exists and hasn't expired (with buffer)."""
     path = settings.LINELEADER_TOKEN_FILE
     if not os.path.exists(path):
         logger.debug("No cached token file found")
         return None
 
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             data = json.load(f)
-
         token_str: str = data["token"]
         expires_at = datetime.fromisoformat(data["expires_at"])
         buffer = timedelta(minutes=_TOKEN_BUFFER_MINUTES)
-
         if datetime.now(timezone.utc) < (expires_at - buffer):
             return token_str
-
         logger.info("Cached token has expired — will re-login")
         return None
-
     except Exception as e:
         logger.warning("Could not read cached token: %s", e)
         return None
@@ -94,107 +220,20 @@ def _load_cached_token() -> Optional[str]:
 def _save_token(token_str: str, expires_at: datetime) -> None:
     """Save token and expiry to cache file."""
     os.makedirs(os.path.dirname(settings.LINELEADER_TOKEN_FILE), exist_ok=True)
-    data = {
-        "token": token_str,
-        "expires_at": expires_at.isoformat(),
-    }
     with open(settings.LINELEADER_TOKEN_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump({"token": token_str, "expires_at": expires_at.isoformat()}, f, indent=2)
     logger.debug("Token saved to %s", settings.LINELEADER_TOKEN_FILE)
 
 
 def _parse_jwt_expiry(token_str: str) -> datetime:
-    """
-    Parse the exp claim from a JWT to get the expiry datetime.
-    token_str should be the raw JWT (without "Bearer " prefix).
-    Falls back to 1 hour from now if parsing fails.
-    """
+    """Parse exp claim from JWT. Falls back to 1 hour from now if parsing fails."""
     try:
-        # JWT structure: header.payload.signature (base64url encoded)
         parts = token_str.split(".")
         if len(parts) != 3:
             raise ValueError("Not a valid JWT")
-
-        # Add padding if needed
         payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-        exp: int = payload["exp"]
-        return datetime.fromtimestamp(exp, tz=timezone.utc)
-
+        return datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
     except Exception as e:
         logger.warning("Could not parse JWT expiry: %s — defaulting to 1 hour", e)
         return datetime.now(timezone.utc) + timedelta(hours=1)
-
-
-# ── Playwright login ──────────────────────────────────────────────────────────
-
-async def _login_and_capture_token() -> str:
-    """
-    Launch a headless browser, log in to LineLeader, and capture
-    the Bearer token from the /api/v3/sso/login response.
-    """
-    captured: dict = {}
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=settings.BROWSER_HEADLESS)
-        context = await browser.new_context()
-        page = await context.new_page()
-
-        async def _on_response(response: Response) -> None:
-            if "api/v3/sso/login" in response.url and not captured:
-                try:
-                    body = await response.json()
-                    raw_token: str = body.get("token") or body.get("access_token", "")
-                    if raw_token:
-                        bearer = f"Bearer {raw_token}"
-                        expires_at = _parse_jwt_expiry(raw_token)
-                        captured["token"] = bearer
-                        captured["expires_at"] = expires_at
-                        logger.debug(
-                            "Intercepted sso/login response from: %s", response.url
-                        )
-                        logger.info(
-                            "Bearer token captured — expires at %s",
-                            expires_at.astimezone().strftime("%H:%M:%S"),
-                        )
-                except Exception as e:
-                    logger.warning("Could not parse sso/login response: %s", e)
-
-        page.on("response", _on_response)
-
-        # Navigate to login page
-        logger.info("Navigating to LineLeader login page")
-        await page.goto(settings.LINELEADER_LOGIN_URL, timeout=settings.BROWSER_TIMEOUT_MS)
-
-        # Wait for the login form to appear (JS-rendered — may take a moment after page load)
-        await page.wait_for_selector("#username", timeout=settings.BROWSER_TIMEOUT_MS)
-
-        # Fill credentials
-        logger.debug("Filling in credentials")
-        await page.fill("#username", settings.LINELEADER_USERNAME)
-        await page.fill("#password", settings.LINELEADER_PASSWORD)
-
-        # Submit
-        logger.debug("Submitting login form")
-        await page.click("button[type='submit']")
-
-        # Wait for redirect to ChildCareCRM dashboard
-        await page.wait_for_url("**/my.childcarecrm.com/**", timeout=settings.BROWSER_TIMEOUT_MS)
-        logger.info("Login successful — landed on: %s", page.url)
-
-        # After landing on the app, it calls sso/login to exchange the OAuth code
-        # for a Bearer JWT. Wait for network to go idle so that call completes
-        # before we close the browser.
-        if not captured.get("token"):
-            await page.wait_for_load_state("networkidle", timeout=settings.BROWSER_TIMEOUT_MS)
-
-        await browser.close()
-
-    if not captured.get("token"):
-        raise RuntimeError(
-            "Login appeared to succeed but Bearer token was not captured. "
-            "The sso/login API response may have changed."
-        )
-
-    _save_token(captured["token"], captured["expires_at"])
-    return captured["token"]
