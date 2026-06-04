@@ -86,7 +86,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ## Current Status
 
-**Last updated: 2026-06-03**
+**Last updated: 2026-06-04**
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
@@ -96,6 +96,26 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | 4 — Move / create / cancel appointments | ⬜ Not started | Post-Milestone 3 |
 | 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete | Web UI + multi-provider LLM (Claude/Ollama) |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started | Backlog |
+
+### Session 2026-06-04 — Tool pattern, date safety, unit tests
+
+**Changes made:**
+- ✅ **Tool pattern enforced** (ADR-009) — all tools pass raw date phrases from Claude; Python owns resolution, validation, and conflict detection. Claude never does date math.
+- ✅ **`core/date_utils.py`** — new shared module: `resolve_date()`, `resolve_time()`, `resolve_datetime()`. Handles day names, month+day, ordinals ("8th", "the 11th"), relative words, and day/date conflict detection ("Friday June 6th" → caught).
+- ✅ **`ChatbotEngine._resolve_tool_date()`** — shared helper on the class; all handlers call it instead of duplicating resolve logic.
+- ✅ **`get_upcoming_gbs_tours` tool** — new tool replacing Claude's fan-out across multiple dates. Single `/action-items?future` call, filtered by `after_date`, deduplicated, capped at `limit`. "After June 16th" is exclusive (returns from June 17th).
+- ✅ **Multi-tool fix** (ADR-010) — `llm_provider.py` now collects ALL `tool_use` blocks per response (not just the first). Agentic loop executes all in one batch and returns all results in one user message. Fixes 400 errors when Claude fires parallel tool calls.
+- ✅ **Schedule header fixed** — `format_unified_schedule` now uses the actual requested date in its header ("Schedule for Friday, June 5, 2026") so Claude copies it rather than computing its own.
+- ✅ **`_parse_single_item` bug fixed** — `display_type` was referenced before being extracted from the item dict (would NameError if called).
+- ✅ **Unit tests** — 92 tests across 5 files, all passing:
+  - `tests/core/test_date_utils.py` — resolve_date, resolve_time, conflict detection, ordinals
+  - `tests/sites/lineleader/test_schedules.py` — _calculate_age, _is_junior, _build_put_payload, _parse_tasks, _parse_single_item, get_upcoming_gbs_tours
+  - `tests/sites/mystudio/test_schedules.py` — _parse_student_to_appointment
+  - `tests/test_chatbot_helpers.py` — _resolve_tool_date
+  - `tests/test_llm_provider.py` — multi-tool extraction
+- ✅ **`pytest` added** to `requirements.txt`
+
+**Run tests:** `python3 -m pytest tests/ -v`
 
 ### Session 2026-06-03 — Cloud prep + observability
 
@@ -172,8 +192,11 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
   - Instantiates provider based on `LLM_PROVIDER` env var (defaults to Claude)
 - `chatbot.py` — ChatbotEngine class (provider-agnostic) with agentic loop and tools:
   - `get_full_schedule` — unified LineLeader + MyStudio schedule for any date
-  - `get_gbs_tours` — GBS tours only (LineLeader) for any date
+  - `get_gbs_tours` — GBS tours only (LineLeader) for a specific date
+  - `get_upcoming_gbs_tours` — next N GBS tours from a given date forward (replaces multi-date fan-out)
   - `reschedule_tour` — reschedule a tour to new time
+  - All tools accept raw date phrases; Python resolves via `core/date_utils.py`
+  - `_resolve_tool_date()` — shared date resolution helper on the class
   - Logs: user query, tool name + inputs, tool duration, total request time
   - Writes one entry per query to `logs/query_analytics.jsonl`
 - `analytics.py` — Query analytics: `top_intents()`, `top_tools()`, `top_queries()`, `recent()`
@@ -300,7 +323,8 @@ cnec-chatbot/
 ├── config/
 │   └── settings.py                  ← ALL config lives here
 ├── core/
-│   └── logger.py                    ← shared structured JSON logging
+│   ├── logger.py                    ← shared structured JSON logging
+│   └── date_utils.py                ← date/time resolution (resolve_date, resolve_time, resolve_datetime)
 ├── sites/
 │   ├── lineleader/
 │   │   ├── auth.py                  ← Playwright-free OAuth2 PKCE login (pure requests)
@@ -316,10 +340,22 @@ cnec-chatbot/
 │   ├── audit.jsonl                  ← audit trail: every user message + response
 │   └── query_analytics.jsonl        ← query analytics: tool calls, timing, intents
 ├── exports/                         ← Excel files saved here
+├── tests/
+│   ├── core/
+│   │   └── test_date_utils.py       ← resolve_date, resolve_time, conflict detection, ordinals
+│   ├── sites/
+│   │   ├── lineleader/
+│   │   │   └── test_schedules.py    ← _build_put_payload, _parse_tasks, get_upcoming_gbs_tours, etc.
+│   │   └── mystudio/
+│   │       └── test_schedules.py    ← _parse_student_to_appointment
+│   ├── test_chatbot_helpers.py      ← _resolve_tool_date
+│   └── test_llm_provider.py         ← multi-tool extraction
 └── browser_state/
     ├── lineleader_token.json        ← cached Bearer token + expiry (~1 hour)
     └── mystudio_cookies.json        ← cached session cookies (30-day expiry)
 ```
+
+**Run tests:** `python3 -m pytest tests/ -v`
 
 Future milestones add:
 - `sites/homebase/` — Homebase API (Milestone 3)
@@ -637,6 +673,59 @@ Python cloud host.
 **Why Playwright was originally kept:** The original note said "Cannot be replicated with raw requests reliably" — this was overly conservative. The CSRF token is server-rendered in HTML, not JS-generated.
 
 **Impact:** `playwright` removed from `requirements.txt`. No `playwright install chromium` step needed.
+
+---
+
+### ADR-008 — Agent refactor: registry pattern + clean system prompt
+**Date:** June 2026 | **Milestone:** 5 (completed)
+
+**Decision:** Refactored `chatbot.py` to use a tool registry pattern.
+- System prompt reduced to identity + safety rules + tone only
+- All routing rules and format templates removed from the prompt
+- Tool descriptions rewritten to describe data returned, not routing logic
+- Format instructions moved into Python tool handlers
+- `_register()` / `_execute_tool()` replace the if/elif dispatch chain
+- All handler signatures normalized to `(self, tool_input: dict)`
+
+**Why:** As Milestones 3–6 add more tools, the old pattern would have
+accumulated routing rules in the system prompt — a maintenance trap.
+The registry means adding a new tool is one `_register()` call + one handler.
+The system prompt never changes.
+
+---
+
+### ADR-009 — Claude passes raw phrases; Python owns all date resolution
+**Date:** June 2026 | **Milestone:** 5
+
+**The pattern in one sentence:**
+Claude reads intent → picks a tool → Python executes it → Python formats the result → Claude frames it.
+
+**Decision:** All tool parameters that involve dates or times are passed as raw natural language phrases exactly as the user said them. Python resolves, validates, and detects conflicts. Claude never does date math.
+
+**What this means in practice:**
+- Tool schemas use `date_str`, `time_str`, `after_date_str` — described as "pass the raw phrase, do not resolve"
+- `core/date_utils.py` owns all resolution: day names, month+day, ordinals ("8th"), relative words, day/date conflict detection
+- `ChatbotEngine._resolve_tool_date()` is the shared entry point for all handlers
+- If Claude says "Friday June 6th" and June 6 is a Saturday, Python catches it and returns the conflict message — Claude never writes to the API
+
+**Why:** Claude's date arithmetic is unreliable (confirmed: "Friday" → June 6 when Friday is June 5). A wrong date on a read tool means a wrong schedule. A wrong date on a write tool (reschedule) means corrupted data. Python is deterministic; Claude is not.
+
+**Boundaries:**
+- Claude's job: extract what the user literally said ("Friday June 6th", "10am")
+- Python's job: resolve to datetime, validate, convert to UTC, call the API
+
+---
+
+### ADR-010 — Multi-tool batch execution in agentic loop
+**Date:** June 2026 | **Milestone:** 5
+
+**Decision:** `llm_provider.py` collects ALL `tool_use` blocks from a single Claude response (not just the first). The agentic loop in `chatbot.py` executes all tools in the batch sequentially and returns all results in one user message.
+
+**Why:** The Anthropic API requires every `tool_use` block to have a matching `tool_result` in the immediately following user message. The original code extracted only the first tool_use block, silently dropping the rest, causing orphaned IDs and 400 errors on the next API call when Claude sent multiple tool calls in one response.
+
+**Impact:** Claude can now make parallel tool calls (e.g. fetch two dates at once). Tools execute sequentially in Python — no true parallelism yet, but correctness is restored.
+
+**Note:** Parallel tool calls are a symptom of a missing tool (e.g. `get_upcoming_gbs_tours` was added to eliminate the multi-date fan-out pattern). When Claude fans out, it's a signal to add a more appropriate tool.
 
 ---
 

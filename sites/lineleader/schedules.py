@@ -81,6 +81,81 @@ class GBSSession:
 # Main public functions
 # ---------------------------------------------------------------------------
 
+def get_upcoming_gbs_tours(
+    bearer_token: str,
+    after_date: str = "",
+    limit: int = 5,
+) -> List[GBSSession]:
+    """
+    Fetch the next upcoming GBS tours from LineLeader (future action-items).
+
+    Args:
+        bearer_token: Valid Bearer token.
+        after_date:   Only return tours on or after this date (YYYY-MM-DD).
+                      Defaults to today if not provided.
+        limit:        Max number of tours to return.
+
+    Returns:
+        List of GBSSession objects sorted by start_time, capped at limit.
+    """
+    from datetime import datetime as dt
+
+    cutoff = date.today()
+    if after_date:
+        try:
+            cutoff = dt.strptime(after_date, "%Y-%m-%d").date()
+        except ValueError:
+            logger.warning("Invalid after_date '%s', defaulting to today", after_date)
+
+    # Fetch today + future so we don't miss same-day tours
+    items = _fetch_action_items(bearer_token, date_filter="today", limit=200) or []
+    future = _fetch_action_items(bearer_token, date_filter="future", limit=200) or []
+    all_items = items + future
+
+    sessions = []
+    seen_ids = set()
+    for item in all_items:
+        if item.get("display_type") != "Tour":
+            continue
+        date_time_raw = item.get("date_time", "")
+        if not date_time_raw:
+            continue
+        try:
+            start_time = datetime.fromisoformat(date_time_raw)
+        except ValueError:
+            continue
+        local_date = start_time.astimezone().date()
+        if local_date < cutoff:
+            continue
+        item_id = str(item.get("item_id", ""))
+        if item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+
+        description = item.get("description", "")
+        first = item.get("guardian_first_name", "").strip()
+        last = item.get("guardian_last_name", "").strip()
+        a_first = item.get("assignee_first_name", "").strip()
+        a_last = item.get("assignee_last_name", "").strip()
+
+        sessions.append(GBSSession(
+            student_name=f"{first} {last}".strip() or "Unknown",
+            start_time=start_time,
+            display_type="Tour",
+            description=description,
+            tour_type="JR GBS" if _is_junior(description) else "GBS",
+            location_name=item.get("location_name", ""),
+            item_id=item_id,
+            assignee_name=f"{a_first} {a_last}".strip(),
+            raw_data=item,
+        ))
+
+    sessions.sort(key=lambda s: s.start_time)
+    result = sessions[:limit]
+    logger.info("get_upcoming_gbs_tours: %d tours found after %s (limit %d)", len(result), cutoff, limit)
+    return result
+
+
 def get_todays_sessions(bearer_token: str) -> List[GBSSession]:
     """
     Fetch all GBS Tours scheduled for today from the ChildCareCRM API.
@@ -468,6 +543,7 @@ def _parse_single_item(
         return None
 
     # Only care about Tours — all Tours are GBS Tours
+    display_type = item.get("display_type", "")
     description = item.get("description", "")
     if display_type != "Tour":
         return None

@@ -66,21 +66,20 @@ class ClaudeProvider(LLMProvider):
 
             # Parse Claude response into standardized format
             if response.stop_reason == "tool_use":
-                # Find the tool_use block
-                tool_use_block = None
-                for block in response.content:
-                    if block.type == "tool_use":
-                        tool_use_block = block
-                        break
+                # Collect ALL tool_use blocks — Claude may request several at once
+                tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
 
-                if tool_use_block:
+                if tool_use_blocks:
                     return {
                         "type": "tool_use",
-                        "content": {
-                            "name": tool_use_block.name,
-                            "input": tool_use_block.input,
-                            "id": tool_use_block.id,
-                        },
+                        "content": [
+                            {
+                                "name": b.name,
+                                "input": b.input,
+                                "id": b.id,
+                            }
+                            for b in tool_use_blocks
+                        ],
                         "raw": response,
                     }
 

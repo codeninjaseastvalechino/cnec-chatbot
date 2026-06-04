@@ -91,62 +91,53 @@ class ChatbotEngine:
                 tools=self._get_tools(),
             )
 
-            # Check if LLM wants to use a tool
+            # Check if LLM wants to use a tool (may be multiple in one response)
             if response_data["type"] == "tool_use":
-                tool_content = response_data["content"]
-                tool_name = tool_content["name"]
-                tool_input = tool_content["input"]
-                tool_id = tool_content["id"]
+                tool_calls = response_data["content"]  # always a list now
 
-                logger.info(
-                    "Tool call: %s | inputs: %s",
-                    tool_name,
-                    json.dumps(tool_input),
-                )
-
-                # Notify user what we're doing
-                if status_callback:
-                    status_msg = self._TOOL_STATUS.get(tool_name, f"Running {tool_name}...")
-                    status_callback(status_msg)
-
-                # Execute the tool (with timing)
-                tool_start = time.monotonic()
-                tool_result = self._execute_tool(tool_name, tool_input)
-                tool_elapsed = time.monotonic() - tool_start
-                logger.info(
-                    "Tool done: %s | %.1fs | result: %d chars",
-                    tool_name, tool_elapsed, len(tool_result),
-                )
-                _tracker.record_tool(tool_name, tool_input, tool_elapsed)
-
-                # Add assistant's response to history
-                # For Claude: use the raw response blocks (required for proper tool_result matching)
-                # For Ollama: just use the tool info as text
+                # Add assistant turn with all tool_use blocks first
                 raw_response = response_data.get("raw")
                 if raw_response and hasattr(raw_response, "content"):
-                    # Claude response - use original content blocks
                     self.conversation_history.append({
                         "role": "assistant",
                         "content": raw_response.content
                     })
                 else:
-                    # Ollama or other providers - use text representation
                     self.conversation_history.append({
                         "role": "assistant",
-                        "content": f"[Using tool: {tool_name}]"
+                        "content": f"[Using tools: {[t['name'] for t in tool_calls]}]"
                     })
 
-                # Add tool result to history
-                self.conversation_history.append({
-                    "role": "user",
-                    "content": [{
+                # Execute every tool call and collect results
+                tool_results = []
+                for tool_call in tool_calls:
+                    tool_name = tool_call["name"]
+                    tool_input = tool_call["input"]
+                    tool_id = tool_call["id"]
+
+                    logger.info("Tool call: %s | inputs: %s", tool_name, json.dumps(tool_input))
+
+                    if status_callback:
+                        status_callback(self._TOOL_STATUS.get(tool_name, f"Running {tool_name}..."))
+
+                    tool_start = time.monotonic()
+                    tool_result = self._execute_tool(tool_name, tool_input)
+                    tool_elapsed = time.monotonic() - tool_start
+                    logger.info("Tool done: %s | %.1fs | result: %d chars", tool_name, tool_elapsed, len(tool_result))
+                    _tracker.record_tool(tool_name, tool_input, tool_elapsed)
+
+                    tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tool_id,
                         "content": tool_result,
-                    }]
+                    })
+
+                # Add all results in one user message — Anthropic requires this
+                self.conversation_history.append({
+                    "role": "user",
+                    "content": tool_results,
                 })
 
-                # Continue the loop to get LLM's response based on tool result
                 continue
 
             # LLM is done — extract text response
@@ -182,9 +173,15 @@ class ChatbotEngine:
 
     def _get_system_prompt(self) -> str:
         """System prompt: identity, safety, tone only."""
-        return """You are an operations assistant for Code Ninjas Eastvale Chino.
+        from datetime import date
+        today = date.today()
+        today_str = today.strftime("%A, %B %-d, %Y")  # e.g. "Thursday, June 4, 2026"
+        return f"""You are an operations assistant for Code Ninjas Eastvale Chino.
 You help staff manage daily schedules, student appointments, and tours
 by querying the center's systems and taking action on their behalf.
+
+Today is {today_str}. Use this as your anchor when resolving relative date
+references like "today", "tomorrow", "Friday", "next week", etc.
 
 You have access to tools that connect to LineLeader (tours) and MyStudio
 (student classes). Use whichever tools are appropriate to fully answer
@@ -217,9 +214,9 @@ Be concise and friendly. Staff are busy — get to the point."""
                 "tours only. If no date is specified, defaults to today."
             ),
             parameters={
-                "date": {
+                "date_str": {
                     "type": "string",
-                    "description": "Date in YYYY-MM-DD format (e.g., 2026-06-03). Defaults to today if not specified.",
+                    "description": "The date exactly as the user said it (e.g. 'today', 'tomorrow', 'Friday', 'June 9th', 'Monday June 8th'). Do not resolve — pass the raw phrase. Omit if no date was mentioned.",
                 }
             },
             handler=self._handle_get_full_schedule,
@@ -234,12 +231,33 @@ Be concise and friendly. Staff are busy — get to the point."""
                 "If no date is specified, defaults to today."
             ),
             parameters={
-                "date": {
+                "date_str": {
                     "type": "string",
-                    "description": "Date in YYYY-MM-DD format (e.g., 2026-06-03). Defaults to today if not specified.",
+                    "description": "The date exactly as the user said it (e.g. 'today', 'tomorrow', 'Friday', 'June 9th', 'Monday June 8th'). Do not resolve — pass the raw phrase. Omit if no date was mentioned.",
                 }
             },
             handler=self._handle_get_gbs_tours,
+        )
+        self._register(
+            name="get_upcoming_gbs_tours",
+            description=(
+                "Fetches the next upcoming GBS tours from LineLeader, starting from a given date. "
+                "Use this when the user asks about future tours without specifying an exact date — "
+                "e.g. 'what tours do we have coming up?', 'any GBS after the 11th?', "
+                "'what's the next tour?', 'tours this week'. "
+                "Do NOT use this for a specific date — use get_gbs_tours instead."
+            ),
+            parameters={
+                "after_date_str": {
+                    "type": "string",
+                    "description": "The date phrase exactly as the user said it (e.g. 'the 11th', 'June 11th', 'next Monday', 'today'). Do not resolve — pass the raw phrase. Omit if the user didn't mention a start date.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max number of tours to return. Defaults to 5.",
+                },
+            },
+            handler=self._handle_get_upcoming_gbs_tours,
         )
         self._register(
             name="reschedule_tour",
@@ -253,9 +271,13 @@ Be concise and friendly. Staff are busy — get to the point."""
                     "type": "string",
                     "description": "The tour ID to reschedule",
                 },
-                "new_datetime": {
+                "date_str": {
                     "type": "string",
-                    "description": "New date and time in ISO 8601 format (e.g. 2026-05-28T14:30:00Z)",
+                    "description": "The date exactly as the user said it (e.g. 'Friday', 'June 6th', 'Friday June 6th', 'tomorrow', 'next Tuesday'). Do not resolve or interpret — pass the raw phrase.",
+                },
+                "time_str": {
+                    "type": "string",
+                    "description": "The time exactly as the user said it (e.g. '10am', '2:30 PM', '14:00'). Do not convert — pass the raw phrase.",
                 },
             },
             handler=self._handle_reschedule_tour,
@@ -310,35 +332,37 @@ Be concise and friendly. Staff are busy — get to the point."""
             logger.error("Tool execution failed: tool=%s error=%s", tool_name, e)
             return f"Error running {tool_name}: {str(e)}"
 
+    def _resolve_tool_date(self, tool_input: dict, key: str = "date_str", default: str = "today"):
+        """
+        Resolve a raw date phrase from tool_input into a datetime.
+        Returns (resolved_datetime, None) on success, (None, error_str) on failure.
+        Handlers call this and return the error string immediately if it's not None.
+        """
+        from core.date_utils import resolve_date
+        raw = tool_input.get(key, "").strip()
+        try:
+            return resolve_date(raw if raw else default), None
+        except ValueError as e:
+            return None, str(e)
+
     def _handle_get_gbs_tours(self, tool_input: dict) -> str:
         """Get GBS tours for a specified date (defaults to today)."""
-        from datetime import date, datetime
-
-        date_str = tool_input.get("date", "").strip()
-
-        # Default to today if no date provided
-        if not date_str:
-            date_str = date.today().strftime("%Y-%m-%d")
-
-        try:
-            # Validate date format
-            datetime.strptime(date_str, "%Y-%m-%d")
-        except ValueError:
-            return f"Invalid date format: '{date_str}'. Please use YYYY-MM-DD format (e.g., 2026-06-03)."
+        resolved, err = self._resolve_tool_date(tool_input)
+        if err:
+            return err
+        date_str = resolved.strftime("%Y-%m-%d")
 
         try:
             if not self.bearer_token:
                 self.bearer_token = asyncio.run(get_bearer_token())
 
-            # Use the parameterized function for any date
             from sites.lineleader.schedules import get_sessions_for_date
             sessions = get_sessions_for_date(self.bearer_token, date_str)
             enrich_sessions_with_children(self.bearer_token, sessions)
 
             if not sessions:
-                return f"No tours scheduled for {date_str}."
+                return f"No tours scheduled for {resolved.strftime('%A, %B %-d')}."
 
-            # Format as readable text with item_id included so Claude can reference it
             date_display = sessions[0].date_display() if sessions else date_str
             lines = [f"Tours for {date_display}:\n"]
             for i, session in enumerate(sessions, 1):
@@ -348,35 +372,80 @@ Be concise and friendly. Staff are busy — get to the point."""
                     f"Parent: {session.student_name} | Children: {children_str} | "
                     f"Type: {session.tour_type} | Staff: {session.assignee_name}"
                 )
-
-            result = "\n".join(lines)
-            return result
+            return "\n".join(lines)
 
         except Exception as e:
             raise RuntimeError(f"Failed to fetch tours for {date_str}: {e}")
 
-    def _handle_reschedule_tour(self, tool_input: dict) -> str:
-        """Reschedule a tour (calls Milestone 1's reschedule_tour function)."""
-        from datetime import datetime
+    def _handle_get_upcoming_gbs_tours(self, tool_input: dict) -> str:
+        """Fetch upcoming GBS tours from a given date forward."""
+        from sites.lineleader.schedules import get_upcoming_gbs_tours
 
-        tour_id = tool_input.get("tour_id", "")
-        new_datetime_str = tool_input.get("new_datetime", "")
+        limit = int(tool_input.get("limit", 5))
+
+        after_date = ""
+        label = "upcoming"
+        if tool_input.get("after_date_str", "").strip():
+            resolved, err = self._resolve_tool_date(tool_input, key="after_date_str")
+            if err:
+                return err
+            from datetime import timedelta
+            # "after June 16th" means strictly after — exclude the boundary date
+            exclusive = resolved + timedelta(days=1)
+            after_date = exclusive.strftime("%Y-%m-%d")
+            label = f"after {resolved.strftime('%B %-d')}"
 
         try:
             if not self.bearer_token:
                 self.bearer_token = asyncio.run(get_bearer_token())
 
-            # Fetch all sessions to find the one to reschedule
+            sessions = get_upcoming_gbs_tours(self.bearer_token, after_date=after_date, limit=limit)
+            enrich_sessions_with_children(self.bearer_token, sessions)
+
+            if not sessions:
+                return f"No GBS tours found {label}."
+
+            lines = [f"Next {len(sessions)} GBS tour(s) {label}:\n"]
+            for i, session in enumerate(sessions, 1):
+                children_str = ", ".join(session.child_display) if session.child_display else "(no children listed)"
+                lines.append(
+                    f"{i}. [ID: {session.item_id}] {session.date_display()} {session.time_display()} - "
+                    f"Parent: {session.student_name} | Children: {children_str} | "
+                    f"Type: {session.tour_type} | Staff: {session.assignee_name}"
+                )
+            return "\n".join(lines)
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch upcoming tours: {e}")
+
+    def _handle_reschedule_tour(self, tool_input: dict) -> str:
+        """Reschedule a tour. Python owns all date/time resolution — Claude passes raw phrases."""
+        from core.date_utils import resolve_datetime
+
+        tour_id = tool_input.get("tour_id", "")
+        date_str = tool_input.get("date_str", "").strip()
+        time_str = tool_input.get("time_str", "").strip()
+
+        if not date_str:
+            return "Please specify a date to reschedule to (e.g. 'Friday', 'June 9th')."
+        if not time_str:
+            return "Please specify a time to reschedule to (e.g. '10am', '2:30 PM')."
+
+        try:
+            new_local_dt = resolve_datetime(date_str, time_str)
+        except ValueError as e:
+            return str(e)
+
+        try:
+            if not self.bearer_token:
+                self.bearer_token = asyncio.run(get_bearer_token())
+
             sessions = get_todays_sessions(self.bearer_token)
             session = next((s for s in sessions if s.item_id == tour_id), None)
 
             if not session:
                 return f"Tour {tour_id} not found."
 
-            # Parse the ISO datetime string to a datetime object
-            new_local_dt = datetime.fromisoformat(new_datetime_str.replace('Z', '+00:00'))
-
-            # Call the Milestone 1 reschedule function
             success, message = reschedule_tour(
                 bearer_token=self.bearer_token,
                 session=session,
@@ -411,19 +480,10 @@ Be concise and friendly. Staff are busy — get to the point."""
 
     def _handle_get_full_schedule(self, tool_input: dict) -> str:
         """Get full schedule (GBS tours + student appointments) for a specified date (defaults to today)."""
-        from datetime import date, datetime
-
-        date_str = tool_input.get("date", "").strip()
-
-        # Default to today if no date provided
-        if not date_str:
-            date_str = date.today().strftime("%Y-%m-%d")
-
-        try:
-            # Validate date format
-            datetime.strptime(date_str, "%Y-%m-%d")
-        except ValueError:
-            return f"Invalid date format: '{date_str}'. Please use YYYY-MM-DD format (e.g., 2026-06-03)."
+        resolved, err = self._resolve_tool_date(tool_input)
+        if err:
+            return err
+        date_str = resolved.strftime("%Y-%m-%d")
 
         try:
             # Fetch GBS tours from LineLeader
@@ -452,14 +512,12 @@ Be concise and friendly. Staff are busy — get to the point."""
             self._last_gbs_sessions = gbs_sessions
             self._last_appointments = appointments
 
-            # Format unified schedule
-            formatted = format_unified_schedule(gbs_sessions, appointments)
+            formatted = format_unified_schedule(gbs_sessions, appointments, date=resolved)
 
             if not formatted or (not gbs_sessions and not appointments):
-                return f"No schedule found for {date_str}."
+                return f"No schedule found for {resolved.strftime('%A, %B %-d, %Y')}."
 
-            result = formatted
-            return result
+            return formatted
 
         except Exception as e:
             raise RuntimeError(f"Failed to fetch full schedule for {date_str}: {e}")

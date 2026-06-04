@@ -77,6 +77,7 @@ def format_unified_schedule(gbs_sessions, appointments, date=None) -> str:
         date = datetime.now()
 
     # Create unified list with (start_time, type, name, detail) tuples
+
     items = []
 
     # Add GBS sessions
@@ -104,9 +105,10 @@ def format_unified_schedule(gbs_sessions, appointments, date=None) -> str:
     # Sort by time — strip timezone info so naive and aware datetimes can be compared
     items.sort(key=lambda x: x["time"].astimezone().replace(tzinfo=None) if x["time"].tzinfo else x["time"])
 
-    # Format output
-    date_str = date.strftime("%B %d, %Y")  # e.g., "May 31, 2026"
-    lines = [f"📅 Today's Schedule ({date_str})"]
+    # Format output — use actual date so Claude copies it rather than computing its own
+    day_name = date.strftime("%A")           # e.g., "Friday"
+    date_str = date.strftime("%B %-d, %Y")  # e.g., "June 5, 2026"
+    lines = [f"📅 Schedule for {day_name}, {date_str}"]
 
     if not items:
         lines.append("No appointments scheduled.")
