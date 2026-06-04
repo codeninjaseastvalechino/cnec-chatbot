@@ -11,6 +11,7 @@ def _make_engine():
     engine.bearer_token = "fake-token"
     engine._tools = {}
     engine._awaiting_mystudio_otp = False
+    engine.conversation_history = []
     return engine
 
 
@@ -65,3 +66,35 @@ class TestResolveToolDate:
         resolved, err = self._resolve({"date_str": "8th"})
         assert err is None
         assert resolved.date() == date(2026, 6, 8)
+
+
+# ---------------------------------------------------------------------------
+# OTP exchange added to conversation_history
+# ---------------------------------------------------------------------------
+
+class TestOtpConversationHistory:
+    def test_otp_exchange_added_to_history(self):
+        engine = _make_engine()
+        engine._awaiting_mystudio_otp = True
+
+        # Stub out the actual OTP handler
+        engine._handle_otp_submission = MagicMock(return_value="✅ MyStudio connected!")
+
+        result = engine.chat("621458")
+
+        assert result == "✅ MyStudio connected!"
+        # Both user message and assistant response must be in history
+        assert any(m["role"] == "user" and m["content"] == "621458"
+                   for m in engine.conversation_history)
+        assert any(m["role"] == "assistant" and "✅" in m["content"]
+                   for m in engine.conversation_history)
+
+    def test_otp_failure_still_added_to_history(self):
+        engine = _make_engine()
+        engine._awaiting_mystudio_otp = True
+        engine._handle_otp_submission = MagicMock(return_value="❌ OTP failed: wrong code")
+
+        engine.chat("000000")
+
+        assert any(m["role"] == "user" for m in engine.conversation_history)
+        assert any(m["role"] == "assistant" for m in engine.conversation_history)

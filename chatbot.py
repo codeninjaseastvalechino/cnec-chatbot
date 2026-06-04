@@ -73,7 +73,13 @@ class ChatbotEngine:
         """
         # If waiting for MyStudio OTP, handle before passing to LLM
         if self._awaiting_mystudio_otp:
-            return self._handle_otp_submission(user_message)
+            result = self._handle_otp_submission(user_message)
+            # Add to conversation history so Claude knows OTP was resolved
+            # (without this, Claude sees the last assistant message as "🔐 OTP needed"
+            # and keeps asking for it instead of calling tools)
+            self.conversation_history.append({"role": "user", "content": user_message})
+            self.conversation_history.append({"role": "assistant", "content": result})
+            return result
 
         logger.info("User query: %s", user_message[:120])
         request_start = time.monotonic()

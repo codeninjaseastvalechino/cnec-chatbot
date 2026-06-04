@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 
 from config.settings import settings
 from core.logger import get_logger
-from sites.mystudio.auth import get_session
+from sites.mystudio.auth import get_session, clear_cached_cookies, MystudioOTPRequired
 from sites.mystudio.appointments import StudentAppointment
 
 logger = get_logger(__name__)
@@ -162,6 +162,10 @@ def _get_class_schedule(session, date_str: str) -> List[Dict]:
 
     try:
         resp = session.get(url, params=params, timeout=30)
+        if resp.status_code == 401:
+            logger.warning("MyStudio returned 401 — cookies expired, clearing cache")
+            clear_cached_cookies()
+            raise MystudioOTPRequired("MyStudio session expired. OTP re-authentication required.")
         resp.raise_for_status()
         data = resp.json()
 
@@ -171,6 +175,8 @@ def _get_class_schedule(session, date_str: str) -> List[Dict]:
 
         return data.get("msg", [])
 
+    except MystudioOTPRequired:
+        raise
     except Exception as e:
         logger.error("Failed to fetch class schedule: %s", e)
         return []

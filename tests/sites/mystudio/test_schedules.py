@@ -1,8 +1,10 @@
 """Tests for sites/mystudio/schedules.py — pure functions only, no HTTP."""
 import pytest
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 
-from sites.mystudio.schedules import _parse_student_to_appointment
+from sites.mystudio.schedules import _parse_student_to_appointment, _get_class_schedule
+from sites.mystudio.auth import MystudioOTPRequired
 
 
 # ---------------------------------------------------------------------------
@@ -78,3 +80,47 @@ class TestParseStudentToAppointment:
             slot = self._make_slot(class_title=class_title)
             appt = _parse_student_to_appointment(self._make_student(), slot)
             assert appt.appointment_type == class_title
+
+
+# ---------------------------------------------------------------------------
+# _get_class_schedule — 401 detection
+# ---------------------------------------------------------------------------
+
+class TestGetClassSchedule401:
+    def _make_session(self, status_code, json_data=None):
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.json.return_value = json_data or {}
+        resp.raise_for_status = MagicMock()
+        if status_code >= 400:
+            from requests.exceptions import HTTPError
+            resp.raise_for_status.side_effect = HTTPError(response=resp)
+        session = MagicMock()
+        session.get.return_value = resp
+        return session
+
+    def test_401_raises_mystudio_otp_required(self):
+        session = self._make_session(401)
+        with patch("sites.mystudio.schedules.clear_cached_cookies") as mock_clear:
+            with pytest.raises(MystudioOTPRequired):
+                _get_class_schedule(session, "2026-06-05")
+            mock_clear.assert_called_once()
+
+    def test_401_clears_cookie_cache(self):
+        session = self._make_session(401)
+        with patch("sites.mystudio.schedules.clear_cached_cookies") as mock_clear:
+            with pytest.raises(MystudioOTPRequired):
+                _get_class_schedule(session, "2026-06-05")
+        mock_clear.assert_called_once()
+
+    def test_non_401_http_error_returns_empty(self):
+        session = self._make_session(500)
+        with patch("sites.mystudio.schedules.clear_cached_cookies") as mock_clear:
+            result = _get_class_schedule(session, "2026-06-05")
+        assert result == []
+        mock_clear.assert_not_called()
+
+    def test_success_returns_schedule(self):
+        session = self._make_session(200, {"status": "Success", "msg": [{"class": "CREATE"}]})
+        result = _get_class_schedule(session, "2026-06-05")
+        assert result == [{"class": "CREATE"}]

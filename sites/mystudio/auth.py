@@ -125,6 +125,14 @@ def complete_otp_login(otp: str) -> requests.Session:
     return session
 
 
+def clear_cached_cookies() -> None:
+    """Delete the cookie cache file — forces fresh login on next get_session() call."""
+    cache_file = settings.MYSTUDIO_COOKIE_FILE
+    if os.path.exists(cache_file):
+        os.remove(cache_file)
+        logger.info("Cleared MyStudio cookie cache — fresh login required")
+
+
 def _load_cached_cookies() -> Optional[Dict[str, str]]:
     """Load cached cookies if file exists. Returns None if missing or expired."""
     cache_file = settings.MYSTUDIO_COOKIE_FILE
