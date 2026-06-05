@@ -86,16 +86,59 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ## Current Status
 
-**Last updated: 2026-06-04**
+**Last updated: 2026-06-05**
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
 | 1 — LineLeader login + GBS/JR GBS tour pull + reschedule | ✅ Complete | Production-ready CLI tool |
 | 2 — MyStudio login + unified schedule + chat/Excel output | ✅ Complete | Direct API + OTP 2FA, 30-day cookie caching |
-| 3 — Student lookup + camp details | ⬜ Not started | Next priority |
-| 4 — Move / create / cancel appointments | ⬜ Not started | Post-Milestone 3 |
+| 3 — Student lookup | ✅ Complete | See session notes below |
+| 3b — Camp details | ⬜ Not started | Separate milestone, own plan needed |
+| 4 — Move / cancel appointments (single session) | ✅ Complete | Recurring all-future ops have gaps — see Known Issues |
+| 4 — Move / cancel appointments (all-future recurring) | ⚠️ Partial | API returns Success but does not cascade — under investigation |
+| 4 — Book new appointment | ⬜ Not started | Blocked: requires student-session token not yet solved |
 | 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete | Web UI + multi-provider LLM (Claude/Ollama) |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started | Backlog |
+
+### Session 2026-06-05 — Milestone 3 + 4 (student lookup + write ops)
+
+**Changes made:**
+- ✅ **`sites/mystudio/students.py`** — new shared foundation module:
+  - `StudentRecord` dataclass (`student_id`, `participant_id`, `name`, `belt_rank`, `parent_name`, `phone`)
+  - `find_student_by_name()` — DataTables search via `POST /getstudent`, deduplicates by `participant_id`
+  - `get_student_details()` — full profile via `GET /getParticipantRegDetails` (parent name, phone, rank, attendance counts)
+  - `get_student_sessions_by_type()` — `GET /getParticipantRegDetailsByType` with `show_more_type=A` (returns all sessions, not just first 4)
+  - `get_student_attendance_this_week()` — counts Attended sessions in current Mon–Sun week
+  - `get_student_upcoming_appointments()` — returns `List[StudentAppointment]` with M4 fields populated
+  - `get_available_slots()` — returns available class slots for a date (capacity > registered)
+- ✅ **`sites/mystudio/appointments.py`** — added 3 optional fields: `registration_detail_id`, `class_appointment_times_id`, `class_appointment_id` (needed for cancel/move; backward compatible)
+- ✅ **`sites/mystudio/write.py`** — new write module:
+  - `cancel_student_appointment()` — `POST /v43/Api/PortalApi/removeParticipant`; `cancel_registration_type: "N"` (single) or `"Y"` (all-future)
+  - `move_student_appointment()` — `POST /Api/v2/RescheduleCurrentAppointment`; `selected_reschedule_type + allow_recurring_reschedule: "N"` (single) or `"Y"` (all-future)
+- ✅ **`config/settings.py`** — added `MYSTUDIO_API_V2_URL = "https://cn.mystudio.io/Api/v2"`
+- ✅ **`chatbot.py`** — new tools and helpers:
+  - `lookup_student` tool — find student by name, returns attendance + upcoming 30-day schedule
+  - `cancel_student_session` tool — cancel single or all-future with `confirmed` dry-run pattern
+  - `move_student_session` tool — move single or all-future with `confirmed` dry-run pattern
+  - `_resolve_student()` helper — shared duplicate resolution: fetches active memberships for each match, auto-selects if only one has active programs, disambiguates with parent + program names if multiple
+  - `_otp_prompt()` helper — deduplicates OTP message across all handlers
+- ✅ **`test_mystudio.py`** — direct API test script (no Claude, no cost) for all 6 test cases
+- ✅ **Unit tests** — 133 tests, all passing:
+  - `tests/sites/mystudio/test_students.py` — 18 tests (search, attendance, parsing, sort)
+  - `tests/sites/mystudio/test_write.py` — 17 tests (cancel/move success, flags, 401, network errors)
+
+**Key discoveries during testing:**
+- `getstudent` endpoint: `buyer_name` field = participant (child) name, NOT parent name — confusing but confirmed
+- `getParticipantRegDetailsByType` with `show_more_type=S` silently returns only 4 sessions; use `show_more_type=A` for all
+- Two accounts exist named "Veshant Bhatia" — same parent, same DOB; one has active memberships, one is inactive. `_resolve_student()` handles this automatically
+- Searching for a parent name (e.g. "Venay Bhatia") returns 0 results — `getstudent` searches participant names only
+
+**Known gaps (under investigation):**
+- ⚠️ **All-future cancel**: `cancel_registration_type: "Y"` returns Success but recurring series is NOT deleted — only the targeted occurrence is removed. Single cancel (`"N"`) works correctly.
+- ⚠️ **All-future reschedule**: `allow_recurring_reschedule: "Y"` returns Success but future occurrences are NOT moved. Single reschedule (`"N"`) works correctly.
+- Both gaps need DevTools capture of what the browser actually sends for recurring operations — there may be additional parameters required.
+- ⬜ **Book new appointment**: `stripeClassAppointmentRegistration` requires a student-session `token` from the POS flow — not obtainable from staff auth session. Deferred.
+- ⚠️ **"Monday" resolves to nearest Monday from today**, not from the from-date context. E.g. moving "from June 13 to Monday" resolves Monday as June 8 (past relative to June 13). Fix: after resolving to_date, if it falls before from_date, roll forward 7 days.
 
 ### Session 2026-06-04 — Tool pattern, date safety, unit tests
 
@@ -1396,13 +1439,18 @@ def mock_lineleader_api(monkeypatch):
 |-------|-----------|
 | Gmail App Passwords unavailable | Google Workspace disabled app passwords. Using manual OTP entry in terminal instead. |
 | Ollama tool calling unreliable | Ollama models ignore tool definitions. Use `TEST_MODE=true` for cost-free testing instead. |
+| **All-future cancel does not cascade** | `cancel_registration_type: "Y"` returns Success but only deletes the targeted occurrence — future recurring sessions remain. Single cancel (`"N"`) works correctly. Root cause unknown — may need additional params. Under investigation. |
+| **All-future reschedule does not cascade** | `allow_recurring_reschedule: "Y"` + `selected_reschedule_type: "Y"` returns Success but future occurrences are not moved. Single reschedule works. Same root cause as above. |
+| **Book new appointment blocked** | `stripeClassAppointmentRegistration` requires a student-session token from the POS flow — not available from staff auth. Deferred until token source identified. |
+| **"Monday" resolves to nearest Monday from today** | When moving a session that is itself in the future (e.g. "move June 13 to Monday"), "Monday" resolves relative to today, not relative to June 13. Workaround: specify explicit date ("June 15"). Fix: after resolving to_date, if it falls before from_date, roll forward 7 days. |
 
 ### 🔄 In Progress / Untested
 | Question | Notes |
 |----------|-------|
 | Does MyStudio rate-limit repeated logins? | Watch for 429 errors if testing OTP flow repeatedly |
-| Homebase student lookup API | Not yet implemented (Milestone 3) |
-| Employee schedule generation | Stretch goal (Milestone 6)
+| All-future recurring ops root cause | Need DevTools capture of browser's recurring cancel/reschedule to compare params |
+| Employee schedule generation | Stretch goal (Milestone 6) |
+| Camp details milestone | Separate milestone (3b) — needs own plan and API discovery |
 
 ---
 

@@ -46,6 +46,7 @@ class Settings:
     # ── MyStudio (Site 1) ─────────────────────────────────────────────────────
     MYSTUDIO_PORTAL_URL: str = "https://cn.mystudio.io/v43/WebPortal/"
     MYSTUDIO_API_URL: str = "https://cn.mystudio.io/v43/Api/PortalApi"
+    MYSTUDIO_API_V2_URL: str = "https://cn.mystudio.io/Api/v2"
 
     # Credentials — loaded from .env
     MYSTUDIO_USERNAME: str = os.getenv("MYSTUDIO_USERNAME", "")

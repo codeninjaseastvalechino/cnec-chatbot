@@ -30,6 +30,10 @@ class StudentAppointment:
     instructor_name: str = ""    # not in API response — placeholder
     location: str = ""           # not in API response — placeholder
     notes: Optional[str] = None
+    # M4 write fields — populated by get_student_upcoming_appointments()
+    registration_detail_id: str = ""      # class_registration_detail_id (needed for cancel/move)
+    class_appointment_times_id: str = ""  # slot ID (needed for move)
+    class_appointment_id: str = ""        # class type ID (needed for move)
 
     def time_display(self) -> str:
         """Format start time as '3:00 PM'."""

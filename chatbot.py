@@ -60,9 +60,12 @@ class ChatbotEngine:
 
     # Friendly status messages shown to user while tools run
     _TOOL_STATUS = {
-        "get_gbs_tours":      "Fetching GBS tours from LineLeader...",
-        "reschedule_tour":    "Rescheduling tour...",
-        "get_full_schedule":  "Fetching schedule from LineLeader and MyStudio...",
+        "get_gbs_tours":            "Fetching GBS tours from LineLeader...",
+        "reschedule_tour":          "Rescheduling tour...",
+        "get_full_schedule":        "Fetching schedule from LineLeader and MyStudio...",
+        "lookup_student":           "Looking up student in MyStudio...",
+        "cancel_student_session":   "Cancelling session in MyStudio...",
+        "move_student_session":     "Rescheduling session in MyStudio...",
     }
 
     def chat(self, user_message: str, status_callback=None) -> str:
@@ -288,13 +291,89 @@ Be concise and friendly. Staff are busy — get to the point."""
             },
             handler=self._handle_reschedule_tour,
         )
-        # MILESTONE 3 — uncomment when implemented:
-        # self._register(
-        #     name="lookup_student",
-        #     description="Look up a student by name...",
-        #     parameters={"student_name": {"type": "string", "description": "..."}},
-        #     handler=self._handle_lookup_student,
-        # )
+        self._register(
+            name="cancel_student_session",
+            description=(
+                "Cancels a student's scheduled MyStudio class session. "
+                "Can cancel a single session on a specific date, or cancel that session "
+                "and all future recurring sessions. "
+                "Always call with confirmed=false first to show the user what will be cancelled, "
+                "then call again with confirmed=true only after the user explicitly agrees."
+            ),
+            parameters={
+                "student_name": {
+                    "type": "string",
+                    "description": "Student name exactly as the user said it.",
+                },
+                "date_str": {
+                    "type": "string",
+                    "description": "The date of the session to cancel, exactly as the user said it (e.g. 'June 27', 'Friday', 'the 27th'). Do not resolve — pass the raw phrase.",
+                },
+                "cancel_all_future": {
+                    "type": "boolean",
+                    "description": "True if the user wants to cancel this session AND all future recurring sessions. False (default) to cancel only the single session on that date.",
+                },
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "Pass false (default) to preview the cancellation. Pass true only after the user has explicitly confirmed.",
+                },
+            },
+            handler=self._handle_cancel_student_session,
+        )
+        self._register(
+            name="move_student_session",
+            description=(
+                "Moves a student's MyStudio class session to a new date and time. "
+                "Can move a single occurrence, or move all future recurring sessions. "
+                "Always call with confirmed=false first to show the user what will change, "
+                "then call again with confirmed=true only after the user explicitly agrees."
+            ),
+            parameters={
+                "student_name": {
+                    "type": "string",
+                    "description": "Student name exactly as the user said it.",
+                },
+                "from_date_str": {
+                    "type": "string",
+                    "description": "The date of the session to move, exactly as the user said it. Do not resolve — pass the raw phrase.",
+                },
+                "to_date_str": {
+                    "type": "string",
+                    "description": "The target date, exactly as the user said it. Do not resolve — pass the raw phrase.",
+                },
+                "to_time_str": {
+                    "type": "string",
+                    "description": "The target time, exactly as the user said it (e.g. '2pm', '2:00 PM'). Do not resolve — pass the raw phrase.",
+                },
+                "move_all_future": {
+                    "type": "boolean",
+                    "description": "True if the user wants to move all future recurring sessions. False (default) to move only the single session.",
+                },
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "Pass false (default) to preview the move. Pass true only after the user has explicitly confirmed.",
+                },
+            },
+            handler=self._handle_move_student_session,
+        )
+        self._register(
+            name="lookup_student",
+            description=(
+                "Look up a student by name in MyStudio. Returns their belt rank, "
+                "parent contact info, attendance this week, attendance over the last "
+                "14 and 30 days, and upcoming scheduled sessions. "
+                "Use when staff ask about a specific student — e.g. 'how many days has "
+                "Henry come this week?', 'what's Journei's upcoming schedule?', "
+                "'look up Veshant'."
+            ),
+            parameters={
+                "student_name": {
+                    "type": "string",
+                    "description": "The student name exactly as the user said it. Can be first name only, full name, or partial.",
+                },
+            },
+            handler=self._handle_lookup_student,
+        )
 
     def _register(self, name: str, description: str, parameters: dict, handler):
         """
@@ -465,6 +544,313 @@ Be concise and friendly. Staff are busy — get to the point."""
 
         except Exception as e:
             raise RuntimeError(f"Failed to reschedule tour: {e}")
+
+    def _handle_cancel_student_session(self, tool_input: dict) -> str:
+        """Cancel a student session — single or all-future. Dry-run until confirmed=True."""
+        from sites.mystudio.students import get_student_upcoming_appointments
+        from sites.mystudio.write import cancel_student_appointment
+
+        student_name = tool_input.get("student_name", "").strip()
+        date_str = tool_input.get("date_str", "").strip()
+        cancel_all_future = bool(tool_input.get("cancel_all_future", False))
+        confirmed = bool(tool_input.get("confirmed", False))
+
+        if not student_name:
+            return "Please specify the student's name."
+        if not date_str:
+            return "Please specify the date of the session to cancel."
+
+        resolved, err = self._resolve_tool_date(tool_input, key="date_str")
+        if err:
+            return err
+        target_date_str = resolved.strftime("%Y-%m-%d")
+
+        student, err = self._resolve_student(student_name)
+        if err:
+            return err
+
+        try:
+            upcoming = get_student_upcoming_appointments(student.student_id, student.participant_id, days_ahead=60)
+        except MystudioOTPRequired:
+            self._awaiting_mystudio_otp = True
+            return self._otp_prompt()
+
+        session_match = next(
+            (a for a in upcoming if a.start_time.strftime("%Y-%m-%d") == target_date_str),
+            None,
+        )
+        if not session_match:
+            return f"No upcoming session found for {student.name} on {resolved.strftime('%A, %B %-d')}."
+
+        scope_label = "this session and all future recurring sessions" if cancel_all_future else "this single session"
+        summary = (
+            f"About to cancel: {student.name} — {session_match.appointment_type}\n"
+            f"Date: {resolved.strftime('%A, %B %-d')} at {session_match.time_display()}\n"
+            f"Scope: {scope_label}"
+        )
+
+        if not confirmed:
+            return f"{summary}\n\nReply 'yes' to confirm or 'no' to cancel."
+
+        try:
+            success, msg = cancel_student_appointment(
+                student_id=student.student_id,
+                participant_id=student.participant_id,
+                class_reg_id=session_match.id,
+                class_registration_detail_id=session_match.registration_detail_id,
+                class_appointment_id=session_match.class_appointment_id,
+                class_appointment_times_id=session_match.class_appointment_times_id,
+                selected_date=target_date_str,
+                cancel_all_future=cancel_all_future,
+            )
+        except MystudioOTPRequired:
+            self._awaiting_mystudio_otp = True
+            return self._otp_prompt()
+
+        if success:
+            return f"Cancelled: {student.name} — {session_match.appointment_type} on {resolved.strftime('%A, %B %-d')}. {msg}"
+        return f"Cancel failed: {msg}"
+
+    def _handle_move_student_session(self, tool_input: dict) -> str:
+        """Move a student session to a new date/time — single or all-future. Dry-run until confirmed=True."""
+        from core.date_utils import resolve_datetime
+        from sites.mystudio.students import get_student_upcoming_appointments, get_available_slots
+        from sites.mystudio.write import move_student_appointment
+
+        student_name = tool_input.get("student_name", "").strip()
+        from_date_str = tool_input.get("from_date_str", "").strip()
+        to_date_str = tool_input.get("to_date_str", "").strip()
+        to_time_str = tool_input.get("to_time_str", "").strip()
+        move_all_future = bool(tool_input.get("move_all_future", False))
+        confirmed = bool(tool_input.get("confirmed", False))
+
+        if not student_name:
+            return "Please specify the student's name."
+        if not from_date_str:
+            return "Please specify the date of the session to move."
+        if not to_date_str or not to_time_str:
+            return "Please specify both the target date and time."
+
+        resolved_from, err = self._resolve_tool_date(tool_input, key="from_date_str")
+        if err:
+            return err
+        try:
+            resolved_to = resolve_datetime(to_date_str, to_time_str)
+        except ValueError as e:
+            return str(e)
+
+        from_date = resolved_from.strftime("%Y-%m-%d")
+        to_date = resolved_to.strftime("%Y-%m-%d")
+        to_time_display = resolved_to.strftime("%I:%M %p").lstrip("0")
+
+        student, err = self._resolve_student(student_name)
+        if err:
+            return err
+
+        try:
+            upcoming = get_student_upcoming_appointments(student.student_id, student.participant_id, days_ahead=60)
+        except MystudioOTPRequired:
+            self._awaiting_mystudio_otp = True
+            return self._otp_prompt()
+
+        session_match = next(
+            (a for a in upcoming if a.start_time.strftime("%Y-%m-%d") == from_date),
+            None,
+        )
+        if not session_match:
+            return f"No upcoming session found for {student.name} on {resolved_from.strftime('%A, %B %-d')}."
+
+        # Find target slot — match by class title + time on target date
+        try:
+            available = get_available_slots(to_date)
+        except MystudioOTPRequired:
+            self._awaiting_mystudio_otp = True
+            return self._otp_prompt()
+
+        target_time_api = resolved_to.strftime("%I:%M %p").lstrip("0")
+        target_slot = next(
+            (s for s in available
+             if s["class_title"] == session_match.appointment_type
+             and s["start_time"].lstrip("0") == target_time_api),
+            None,
+        )
+        if not target_slot:
+            all_times = sorted(set(
+                s["start_time"] for s in available
+                if s["class_title"] == session_match.appointment_type
+            ))
+            times_str = ", ".join(all_times) if all_times else "none"
+            return (
+                f"No available {session_match.appointment_type} slot at {to_time_display} "
+                f"on {resolved_to.strftime('%A, %B %-d')}.\n"
+                f"Available times: {times_str}"
+            )
+
+        scope_label = "all future recurring sessions" if move_all_future else "this single session"
+        summary = (
+            f"About to move: {student.name} — {session_match.appointment_type}\n"
+            f"From: {resolved_from.strftime('%A, %B %-d')} at {session_match.time_display()}\n"
+            f"To:   {resolved_to.strftime('%A, %B %-d')} at {to_time_display}\n"
+            f"Scope: {scope_label}"
+        )
+
+        if not confirmed:
+            return f"{summary}\n\nReply 'yes' to confirm or 'no' to cancel."
+
+        try:
+            success, msg = move_student_appointment(
+                student_id=student.student_id,
+                participant_id=student.participant_id,
+                class_reg_id=session_match.id,
+                class_registration_detail_id=session_match.registration_detail_id,
+                class_appointment_id=session_match.class_appointment_id,
+                class_appointment_times_id=session_match.class_appointment_times_id,
+                program_date=from_date,
+                new_class_appointment_times_id=target_slot["class_appointment_times_id"],
+                new_program_date=to_date,
+                move_all_future=move_all_future,
+            )
+        except MystudioOTPRequired:
+            self._awaiting_mystudio_otp = True
+            return self._otp_prompt()
+
+        if success:
+            return (
+                f"Moved: {student.name} — {session_match.appointment_type}\n"
+                f"From {resolved_from.strftime('%A, %B %-d')} → "
+                f"{resolved_to.strftime('%A, %B %-d')} at {to_time_display}. {msg}"
+            )
+        return f"Move failed: {msg}"
+
+    def _resolve_student(self, student_name: str):
+        """
+        Look up a student by name, handling duplicates by checking active programs.
+
+        Returns (StudentRecord, None) on success.
+        Returns (None, error_string) when not found, ambiguous, or OTP needed.
+
+        Duplicate resolution: for each match, fetch active memberships
+        (mem_status == "Active"). If exactly one match has active programs,
+        auto-select it. If multiple do, return a disambiguation message showing
+        parent name and enrolled programs.
+        """
+        from sites.mystudio.students import find_student_by_name, get_student_details
+
+        try:
+            students = find_student_by_name(student_name)
+        except MystudioOTPRequired:
+            self._awaiting_mystudio_otp = True
+            return None, self._otp_prompt()
+
+        if not students:
+            return None, (
+                f"No student found matching '{student_name}'. "
+                "If that's a parent name, try the student's name instead."
+            )
+
+        if len(students) == 1:
+            return students[0], None
+
+        # Multiple matches — resolve by active programs
+        active = []  # List of (StudentRecord, programs_str)
+        for s in students:
+            try:
+                d = get_student_details(s.student_id, s.participant_id)
+                if not d:
+                    continue
+                memberships = d.get("reg_details", {}).get("membership_details", [])
+                active_memberships = [m for m in memberships if m.get("mem_status") == "Active"]
+                if not active_memberships:
+                    continue
+                s.parent_name = d.get("participant_details", {}).get("buyer_name", "")
+                s.belt_rank = active_memberships[0].get("rank_status", "")
+                programs = ", ".join(
+                    m.get("membership_category_title", "") for m in active_memberships
+                )
+                active.append((s, programs))
+            except Exception:
+                pass
+
+        if len(active) == 1:
+            return active[0][0], None
+
+        if len(active) > 1:
+            lines = [f"Found {len(active)} active students named '{student_name}'. Which one?"]
+            for s, programs in active:
+                lines.append(f"- {s.name} | Parent: {s.parent_name} | Programs: {programs}")
+            return None, "\n".join(lines)
+
+        # No active memberships found — fall back to first result
+        return students[0], None
+
+    def _otp_prompt(self) -> str:
+        return (
+            "🔐 **MyStudio verification needed.**\n\n"
+            f"An OTP code was sent to **{settings.MYSTUDIO_USERNAME}**.\n\n"
+            "Please check your email and reply with the **6-digit code** to continue."
+        )
+
+    def _handle_lookup_student(self, tool_input: dict) -> str:
+        """Look up a student by name — attendance, belt rank, upcoming schedule."""
+        from sites.mystudio.students import (
+            get_student_details,
+            get_student_attendance_this_week,
+            get_student_upcoming_appointments,
+        )
+
+        student_name = tool_input.get("student_name", "").strip()
+        if not student_name:
+            return "Please provide a student name to look up."
+
+        student, err = self._resolve_student(student_name)
+        if err:
+            return err
+
+        try:
+            details = get_student_details(student.student_id, student.participant_id)
+            attendance_14 = "0"
+            attendance_30 = "0"
+            if details:
+                p = details.get("participant_details", {})
+                student.parent_name = p.get("buyer_name", "")
+                student.phone = p.get("student_mobile", "")
+                membership_list = details.get("reg_details", {}).get("membership_details", [])
+                if membership_list:
+                    student.belt_rank = membership_list[0].get("rank_status", "")
+                    attendance_14 = membership_list[0].get("attendance_last_14_days", "0")
+                    attendance_30 = membership_list[0].get("attendance_last_30_days", "0")
+
+            attended_this_week = get_student_attendance_this_week(
+                student.student_id, student.participant_id
+            )
+            upcoming = get_student_upcoming_appointments(
+                student.student_id, student.participant_id, days_ahead=30
+            )
+
+        except MystudioOTPRequired:
+            self._awaiting_mystudio_otp = True
+            return (
+                "🔐 **MyStudio verification needed.**\n\n"
+                f"An OTP code was sent to **{settings.MYSTUDIO_USERNAME}**.\n\n"
+                "Please check your email and reply with the **6-digit code** to continue."
+            )
+
+        lines = [
+            f"Student: {student.name}",
+            f"Parent: {student.parent_name or 'N/A'} | Phone: {student.phone or 'N/A'}",
+            f"Belt: {student.belt_rank or 'N/A'}",
+            f"Attendance: {attended_this_week} session(s) this week | {attendance_14} in last 14 days | {attendance_30} in last 30 days",
+            "",
+        ]
+        if upcoming:
+            lines.append(f"Upcoming sessions ({len(upcoming)}):")
+            for appt in upcoming:
+                day = appt.start_time.strftime("%A, %b %-d")
+                lines.append(f"  - {day} at {appt.time_display()} — {appt.appointment_type}")
+        else:
+            lines.append("No upcoming sessions in the next 14 days.")
+
+        return "\n".join(lines)
 
     def _handle_otp_submission(self, user_message: str) -> str:
         """Handle OTP code submitted via chat."""
