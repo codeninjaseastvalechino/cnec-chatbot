@@ -794,9 +794,12 @@ Be concise and friendly. Staff are busy — get to the point."""
         """Look up a student by name — attendance, belt rank, upcoming schedule."""
         from sites.mystudio.students import (
             get_student_details,
+            get_student_sessions_by_type,
             get_student_attendance_this_week,
             get_student_upcoming_appointments,
         )
+        import calendar as _calendar
+        from datetime import date as _date, datetime as _datetime
 
         student_name = tool_input.get("student_name", "").strip()
         if not student_name:
@@ -808,17 +811,50 @@ Be concise and friendly. Staff are busy — get to the point."""
 
         try:
             details = get_student_details(student.student_id, student.participant_id)
+            billing_cycle_str = ""
+            attended_this_cycle = 0
+            total_this_cycle = 0
             attendance_14 = "0"
             attendance_30 = "0"
+
             if details:
                 p = details.get("participant_details", {})
                 student.parent_name = p.get("buyer_name", "")
                 student.phone = p.get("student_mobile", "")
                 membership_list = details.get("reg_details", {}).get("membership_details", [])
-                if membership_list:
-                    student.belt_rank = membership_list[0].get("rank_status", "")
-                    attendance_14 = membership_list[0].get("attendance_last_14_days", "0")
-                    attendance_30 = membership_list[0].get("attendance_last_30_days", "0")
+                active_mem = next((m for m in membership_list if m.get("mem_status") == "Active"), None)
+                if active_mem:
+                    student.belt_rank = active_mem.get("rank_status", "")
+                    attendance_14 = active_mem.get("attendance_last_14_days", "0")
+                    attendance_30 = active_mem.get("attendance_last_30_days", "0")
+                    next_pay_str = active_mem.get("next_payment_date", "")
+                    if next_pay_str:
+                        try:
+                            next_pay = _datetime.strptime(next_pay_str, "%b %d, %Y").date()
+                            month = next_pay.month - 1 or 12
+                            year = next_pay.year if next_pay.month > 1 else next_pay.year - 1
+                            try:
+                                billing_start = next_pay.replace(year=year, month=month)
+                            except ValueError:
+                                last_day = _calendar.monthrange(year, month)[1]
+                                billing_start = next_pay.replace(year=year, month=month, day=last_day)
+
+                            today = _date.today()
+                            days_in_period = (today - billing_start).days + 1
+                            cycle_sessions = get_student_sessions_by_type(
+                                student.student_id, student.participant_id,
+                                filter_type="P",
+                                from_date=today.strftime("%Y-%m-%d"),
+                                days=days_in_period,
+                            )
+                            attended_this_cycle = sum(
+                                1 for s in cycle_sessions
+                                if s.get("class_attendance_status", "").lower() == "attended"
+                            )
+                            total_this_cycle = len(cycle_sessions)
+                            billing_cycle_str = f"{billing_start.strftime('%b %-d')} – {next_pay_str}"
+                        except Exception:
+                            pass
 
             attended_this_week = get_student_attendance_this_week(
                 student.student_id, student.participant_id
@@ -839,16 +875,19 @@ Be concise and friendly. Staff are busy — get to the point."""
             f"Student: {student.name}",
             f"Parent: {student.parent_name or 'N/A'} | Phone: {student.phone or 'N/A'}",
             f"Belt: {student.belt_rank or 'N/A'}",
-            f"Attendance: {attended_this_week} session(s) this week | {attendance_14} in last 14 days | {attendance_30} in last 30 days",
-            "",
         ]
+        if billing_cycle_str:
+            lines.append(f"Billing cycle: {billing_cycle_str} | Attended: {attended_this_cycle} / {total_this_cycle} session(s) this cycle")
+        lines.append(f"Attendance: {attended_this_week} session(s) this week | {attendance_14} in last 14 days | {attendance_30} in last 30 days")
+        lines.append("")
+
         if upcoming:
             lines.append(f"Upcoming sessions ({len(upcoming)}):")
             for appt in upcoming:
                 day = appt.start_time.strftime("%A, %b %-d")
                 lines.append(f"  - {day} at {appt.time_display()} — {appt.appointment_type}")
         else:
-            lines.append("No upcoming sessions in the next 14 days.")
+            lines.append("No upcoming sessions in the next 30 days.")
 
         return "\n".join(lines)
 

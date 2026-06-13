@@ -86,7 +86,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ## Current Status
 
-**Last updated: 2026-06-05**
+**Last updated: 2026-06-13**
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
@@ -99,6 +99,8 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | 4 — Book new appointment | ⬜ Not started | Blocked: requires student-session token not yet solved |
 | 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete | Web UI + multi-provider LLM (Claude/Ollama) |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started | Backlog |
+| 7 — Railway deployment (public launch) | ⬜ Not started | See deployment plan below — open new chat to execute |
+| 8 — Auto Gmail OTP extraction | ⬜ Not started | Eliminate manual OTP entry — open new chat to design |
 
 ### Session 2026-06-05 — Milestone 3 + 4 (student lookup + write ops)
 
@@ -1437,7 +1439,7 @@ def mock_lineleader_api(monkeypatch):
 ### ⚠️ Known Limitations
 | Issue | Workaround |
 |-------|-----------|
-| Gmail App Passwords unavailable | Google Workspace disabled app passwords. Using manual OTP entry in terminal instead. |
+| Gmail App Passwords unavailable | Google Workspace disabled app passwords. Manual OTP entry required every 30 days. **Planned fix (M8):** auto-extract OTP from Gmail using Google OAuth2 + Gmail API — eliminates manual step entirely, critical for unattended cloud deployment. |
 | Ollama tool calling unreliable | Ollama models ignore tool definitions. Use `TEST_MODE=true` for cost-free testing instead. |
 | **All-future cancel does not cascade** | `cancel_registration_type: "Y"` returns Success but only deletes the targeted occurrence — future recurring sessions remain. Single cancel (`"N"`) works correctly. Root cause unknown — may need additional params. Under investigation. |
 | **All-future reschedule does not cascade** | `allow_recurring_reschedule: "Y"` + `selected_reschedule_type: "Y"` returns Success but future occurrences are not moved. Single reschedule works. Same root cause as above. |
@@ -1451,6 +1453,50 @@ def mock_lineleader_api(monkeypatch):
 | All-future recurring ops root cause | Need DevTools capture of browser's recurring cancel/reschedule to compare params |
 | Employee schedule generation | Stretch goal (Milestone 6) |
 | Camp details milestone | Separate milestone (3b) — needs own plan and API discovery |
+
+---
+
+## Milestone 7 — Railway Deployment (Public Launch)
+
+**Goal:** Deploy the Flask app to Railway so staff and others can access it from any device without running it locally.
+
+**Why Railway:** Existing deployment plan already committed (`105646d`). Supports Python, persistent storage for cookie cache, environment variables for secrets, and auto-deploy from GitHub.
+
+**Key challenges for cloud deployment:**
+- `browser_state/` cookie files must persist across deploys (Railway volume or environment variable injection)
+- MyStudio OTP flow: first deploy will need OTP entry — either via chat UI (already works) or auto-Gmail (M8)
+- `ANTHROPIC_API_KEY` and all `.env` values go into Railway environment variables — never in code
+- Port: Railway sets `PORT` env var — update `app.run()` to use `int(os.getenv("PORT", 5001))`
+
+**Open a new chat and reference the existing Railway deployment plan in git history (`git show 105646d`) to execute.**
+
+---
+
+## Milestone 8 — Auto Gmail OTP Extraction
+
+**Goal:** When MyStudio cookies expire (every 30 days), automatically read the OTP from Gmail instead of requiring manual entry. Critical for unattended cloud deployment.
+
+**Approach:** Google OAuth2 + Gmail API
+1. One-time: create a Google Cloud project, enable Gmail API, create OAuth2 credentials, save `token.json` (refresh token persists indefinitely)
+2. When OTP needed: use `google-auth` + `googleapiclient` to search inbox for the most recent email from MyStudio, extract the 6-digit code via regex
+3. Call `complete_otp_login(extracted_code)` automatically — no human in the loop
+
+**Why not App Passwords:** Google Workspace admin has disabled them for this account.
+
+**Key files to create/modify:**
+- `sites/mystudio/gmail_otp.py` — new module: `fetch_otp_from_gmail() -> str`
+- `sites/mystudio/auth.py` — call `fetch_otp_from_gmail()` in `get_session()` before raising `MystudioOTPRequired`
+- `browser_state/gmail_token.json` — cached OAuth2 refresh token (git-ignored)
+
+**One-time setup (run locally before deploying):**
+```bash
+pip install google-auth google-auth-oauthlib google-api-python-client
+# Create OAuth2 credentials in Google Cloud Console → download credentials.json
+python3 sites/mystudio/gmail_otp.py --setup  # opens browser for one-time consent
+# Saves browser_state/gmail_token.json — upload to Railway as secret file or env var
+```
+
+**Open a new chat to design and implement this.**
 
 ---
 
