@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // \"\"' | { read -r f; echo \"$f\" | grep -q '\\.py$' && /Users/prashantbhatia/cnec-chatbot/.venv/bin/python3 -m pytest /Users/prashantbhatia/cnec-chatbot/tests/ -q --tb=short 2>&1 | tail -20; } || true",
+            "statusMessage": "Running tests..."
+          }
+        ]
+      }
+    ]
+  }
+}

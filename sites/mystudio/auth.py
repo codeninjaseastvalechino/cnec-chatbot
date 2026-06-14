@@ -50,29 +50,31 @@ def get_session() -> requests.Session:
     Return an authenticated requests.Session with valid MyStudio cookies.
 
     If cookies are cached (30 days), returns immediately.
-    If not, triggers OTP email and raises MystudioOTPRequired.
-    Caller must catch MystudioOTPRequired and call complete_otp_login(otp) later.
+    If GMAIL_ADDRESS + GMAIL_APP_PASSWORD are configured, auto-fetches OTP.
+    Otherwise triggers OTP email and raises MystudioOTPRequired for manual entry.
     """
     cached = _load_cached_cookies()
     if cached:
         logger.info("Using cached MyStudio cookies (30-day cache)")
         return _build_session_from_cookies(cached)
 
-    # No cache — start login flow (triggers OTP email)
     logger.info("No valid cached cookies — starting fresh login")
-    _start_login()
-    # _start_login always raises MystudioOTPRequired
+    return _start_login()
 
 
-def _start_login() -> None:
+def _start_login() -> requests.Session:
     """
-    Step 1 of login: POST credentials → OTP email sent → raise MystudioOTPRequired.
-    Stores partial session in _pending_session for complete_otp_login() to use.
+    Step 1 of login: POST credentials → OTP email sent.
+    If Gmail credentials are configured, auto-fetches OTP and completes login.
+    Otherwise raises MystudioOTPRequired for manual entry via chat UI.
     """
     global _pending_session
 
     session = requests.Session()
     session.headers.update(HEADERS)
+
+    # Snapshot inbox before sending credentials so we only look at new emails
+    inbox_uid_before_otp = _get_inbox_uid_snapshot()
 
     logger.info("Sending MyStudio credentials...")
     resp = session.post(f"{BASE_URL}/login", json={
@@ -89,7 +91,50 @@ def _start_login() -> None:
 
     logger.info("OTP email sent to %s", settings.MYSTUDIO_USERNAME)
     _pending_session = session
+
+    code = _try_auto_otp(inbox_uid_before_otp)
+    if code:
+        return complete_otp_login(code)
+
     raise MystudioOTPRequired(f"OTP sent to {settings.MYSTUDIO_USERNAME}")
+
+
+def _get_inbox_uid_snapshot() -> int:
+    """Get current max inbox UID before triggering OTP — used to filter out pre-existing emails."""
+    if not settings.GMAIL_ADDRESS or not settings.GMAIL_APP_PASSWORD:
+        return 0
+    try:
+        from core.gmail_imap import get_inbox_max_uid
+        uid = get_inbox_max_uid(settings.GMAIL_ADDRESS, settings.GMAIL_APP_PASSWORD)
+        logger.debug("Inbox UID snapshot: %d", uid)
+        return uid
+    except Exception:
+        return 0
+
+
+def _try_auto_otp(after_uid: int = 0) -> Optional[str]:
+    """Try to auto-fetch the MyStudio OTP from Gmail. Returns code or None."""
+    if not settings.GMAIL_ADDRESS or not settings.GMAIL_APP_PASSWORD:
+        logger.debug("Gmail credentials not configured — skipping auto-OTP")
+        return None
+
+    logger.info("Auto-OTP: polling Gmail for MyStudio code (after UID %d)...", after_uid)
+    try:
+        from core.gmail_imap import get_2fa_code_from_gmail
+        code = get_2fa_code_from_gmail(
+            gmail_address=settings.GMAIL_ADDRESS,
+            gmail_app_password=settings.GMAIL_APP_PASSWORD,
+            timeout_seconds=settings.GMAIL_2FA_TIMEOUT_SECONDS,
+            after_uid=after_uid,
+        )
+        if code:
+            logger.info("Auto-OTP extracted successfully")
+        else:
+            logger.warning("Auto-OTP timed out — falling back to manual entry")
+        return code
+    except Exception as e:
+        logger.warning("Auto-OTP failed (%s) — falling back to manual entry", e)
+        return None
 
 
 def complete_otp_login(otp: str) -> requests.Session:

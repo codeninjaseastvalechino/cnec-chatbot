@@ -38,7 +38,8 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | **Web UI (mock)** | `TEST_MODE=true python3 app.py` | Zero API costs, instant feedback |
 | **Web UI (real)** | `python3 app.py` | Uses Claude API + LineLeader data |
 | **Chatbot CLI** | `python3 test_chatbot.py` | Debug chatbot engine without web UI |
-| **Clear token** | `rm -f browser_state/lineleader_token.json` | Force fresh login |
+| **Clear LineLeader token** | `rm -f browser_state/lineleader_token.json` | Force fresh LineLeader login |
+| **Clear MyStudio cookies** | `rm -f browser_state/mystudio_cookies.json` | Force fresh MyStudio login + auto-OTP |
 | **View logs** | `tail -f logs/cnec_chatbot.log \| jq .` | Stream structured JSON logs |
 | **Set provider** | `LLM_PROVIDER=ollama python3 app.py` | Switch to Ollama backend |
 
@@ -51,7 +52,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | Issue | Impact | Solution |
 |-------|--------|----------|
 | **Forgot `LLM_PROVIDER` env var** | App defaults to Claude, burns API credits silently | Always set `LLM_PROVIDER=claude` or use `TEST_MODE=true` for dev |
-| **MyStudio OTP cookie expires silently** | App hangs on second run after 30 days | App auto-prompts for OTP, just enter 6-digit code from email |
+| **MyStudio OTP cookie expires silently** | Triggers re-login every 30 days | Auto-handled: app reads OTP from Gmail automatically (M8). No manual entry needed. |
 | **LineLeader token cached for ~1 hour** | Stale data if run after hour-long pause | Safe: 5-min buffer auto re-logins before expiry. Manual: `rm browser_state/lineleader_token.json` |
 | **Mock mode is instant, real mode is not** | Expectations mismatch during dev→prod switch | Mock mode: <10ms responses. Claude mode: ~500-800ms per query |
 | **LineLeader login uses PKCE** | If login hangs, clear the token cache | Run: `rm -f browser_state/lineleader_token.json` (no browser needed) |
@@ -100,7 +101,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete | Web UI + multi-provider LLM (Claude/Ollama) |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started | Backlog |
 | 7 — Railway deployment (public launch) | ⬜ Not started | See deployment plan below — open new chat to execute |
-| 8 — Auto Gmail OTP extraction | ⬜ Not started | Eliminate manual OTP entry — open new chat to design |
+| 8 — Auto Gmail OTP extraction | ✅ Complete | Gmail IMAP + app password; auto-extracts code, no human in the loop |
 
 ### Session 2026-06-05 — Milestone 3 + 4 (student lookup + write ops)
 
@@ -1439,7 +1440,7 @@ def mock_lineleader_api(monkeypatch):
 ### ⚠️ Known Limitations
 | Issue | Workaround |
 |-------|-----------|
-| Gmail App Passwords unavailable | Google Workspace disabled app passwords. Manual OTP entry required every 30 days. **Planned fix (M8):** auto-extract OTP from Gmail using Google OAuth2 + Gmail API — eliminates manual step entirely, critical for unattended cloud deployment. |
+| ~~Gmail App Passwords unavailable~~ | ✅ Resolved (M8) — `eastvalechinocodeninjas@gmail.com` is a regular Gmail account. Enabled 2-Step Verification + created app password. OTP is now auto-extracted via IMAP. |
 | Ollama tool calling unreliable | Ollama models ignore tool definitions. Use `TEST_MODE=true` for cost-free testing instead. |
 | **All-future cancel does not cascade** | `cancel_registration_type: "Y"` returns Success but only deletes the targeted occurrence — future recurring sessions remain. Single cancel (`"N"`) works correctly. Root cause unknown — may need additional params. Under investigation. |
 | **All-future reschedule does not cascade** | `allow_recurring_reschedule: "Y"` + `selected_reschedule_type: "Y"` returns Success but future occurrences are not moved. Single reschedule works. Same root cause as above. |
@@ -1464,7 +1465,7 @@ def mock_lineleader_api(monkeypatch):
 
 **Key challenges for cloud deployment:**
 - `browser_state/` cookie files must persist across deploys (Railway volume or environment variable injection)
-- MyStudio OTP flow: first deploy will need OTP entry — either via chat UI (already works) or auto-Gmail (M8)
+- MyStudio OTP flow: auto-handled via Gmail IMAP (M8 complete) — no manual entry needed on first deploy
 - `ANTHROPIC_API_KEY` and all `.env` values go into Railway environment variables — never in code
 - Port: Railway sets `PORT` env var — update `app.run()` to use `int(os.getenv("PORT", 5001))`
 
@@ -1472,31 +1473,29 @@ def mock_lineleader_api(monkeypatch):
 
 ---
 
-## Milestone 8 — Auto Gmail OTP Extraction
+## Milestone 8 — Auto Gmail OTP Extraction ✅ Complete
 
-**Goal:** When MyStudio cookies expire (every 30 days), automatically read the OTP from Gmail instead of requiring manual entry. Critical for unattended cloud deployment.
+**What it does:** When MyStudio cookies expire (every 30 days), the app automatically reads the OTP from Gmail and completes login — no human in the loop.
 
-**Approach:** Google OAuth2 + Gmail API
-1. One-time: create a Google Cloud project, enable Gmail API, create OAuth2 credentials, save `token.json` (refresh token persists indefinitely)
-2. When OTP needed: use `google-auth` + `googleapiclient` to search inbox for the most recent email from MyStudio, extract the 6-digit code via regex
-3. Call `complete_otp_login(extracted_code)` automatically — no human in the loop
+**How it works:**
+1. Before sending MyStudio credentials, snapshot the inbox's highest message UID
+2. Send credentials → MyStudio emails OTP to `eastvalechinocodeninjas@gmail.com`
+3. Poll Gmail via IMAP every 3 seconds for a new message (UID > snapshot)
+4. Parse the email's plain text / stripped HTML, extract 6-digit code via regex
+5. Submit OTP automatically → cookies cached for 30 days
 
-**Why not App Passwords:** Google Workspace admin has disabled them for this account.
+**Key files:**
+- `core/gmail_imap.py` — `get_2fa_code_from_gmail()` + `get_inbox_max_uid()`
+- `sites/mystudio/auth.py` — `_get_inbox_uid_snapshot()`, `_try_auto_otp()` wired into `_start_login()`
 
-**Key files to create/modify:**
-- `sites/mystudio/gmail_otp.py` — new module: `fetch_otp_from_gmail() -> str`
-- `sites/mystudio/auth.py` — call `fetch_otp_from_gmail()` in `get_session()` before raising `MystudioOTPRequired`
-- `browser_state/gmail_token.json` — cached OAuth2 refresh token (git-ignored)
+**One-time setup (already done):**
+1. Enabled 2-Step Verification on `eastvalechinocodeninjas@gmail.com`
+2. Created Gmail app password at myaccount.google.com/apppasswords
+3. Added `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` to `.env`
 
-**One-time setup (run locally before deploying):**
-```bash
-pip install google-auth google-auth-oauthlib google-api-python-client
-# Create OAuth2 credentials in Google Cloud Console → download credentials.json
-python3 sites/mystudio/gmail_otp.py --setup  # opens browser for one-time consent
-# Saves browser_state/gmail_token.json — upload to Railway as secret file or env var
-```
+**Fallback:** If Gmail credentials are missing or polling times out, falls back to `MystudioOTPRequired` — user is prompted in the chat UI as before.
 
-**Open a new chat to design and implement this.**
+**To test:** `python3 test_mystudio_login.py` (clears cookies and runs the full auto-OTP flow)
 
 ---
 

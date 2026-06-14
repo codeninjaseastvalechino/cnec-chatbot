@@ -247,9 +247,8 @@ def get_sessions_for_date(bearer_token: str, target_date: str) -> List[GBSSessio
 def _calculate_age(dob_str: str) -> Optional[int]:
     """Calculate age in years from an ISO date string (e.g. '2021-12-09')."""
     try:
-        from datetime import date as _date
-        dob = _date.fromisoformat(dob_str)
-        today = _date.today()
+        dob = date.fromisoformat(dob_str)
+        today = date.today()
         return today.year - dob.year - (
             (today.month, today.day) < (dob.month, dob.day)
         )

@@ -110,7 +110,7 @@ Bot:  📅 Wednesday, June 3, 2026
 
 ### Authentication
 - **LineLeader:** Logs in automatically, token cached for ~1 hour
-- **MyStudio:** Cookie cached for 30 days — when it expires, the chatbot prompts for a 6-digit OTP (sent to the center email) directly in the browser chat
+- **MyStudio:** Cookie cached for 30 days — when it expires, the app automatically reads the OTP from Gmail and re-authenticates with no manual input needed
 
 ### Planned
 - ⬜ Quick-query shortcut buttons (common queries that skip Claude entirely — faster, free)
@@ -128,10 +128,12 @@ Bot:  📅 Wednesday, June 3, 2026
 |-----------|---------|--------|
 | 1 | LineLeader login + GBS tours + reschedule (CLI) | ✅ Complete |
 | 2 | MyStudio login + unified schedule + Excel export | ✅ Complete |
-| 3 | Student lookup + camp details | ⬜ Planned |
-| 4 | Create / cancel / move appointments | ⬜ Planned |
+| 3 | Student lookup by name | ✅ Complete |
+| 4 | Cancel / move appointments (single session) | ✅ Complete |
 | 5 | Web chat UI + Claude API + function calling | ✅ Complete |
 | 6 | Employee schedule (Homebase) | ⬜ Backlog |
+| 7 | Railway cloud deployment | ⬜ Not started |
+| 8 | Auto Gmail OTP extraction | ✅ Complete |
 
 ---
 
@@ -141,19 +143,24 @@ Bot:  📅 Wednesday, June 3, 2026
 cnec-chatbot/
 ├── app.py              — Flask web server (the main thing to run)
 ├── chatbot.py          — Claude API integration + tool routing
+├── llm_provider.py     — Multi-provider LLM abstraction (Claude / Ollama)
 ├── analytics.py        — Tracks queries/tools for usage insights
 ├── audit_log.py        — Full interaction log (every message)
 ├── format_tours.py     — Formats schedule data as readable bullets
 ├── export_tours.py     — Generates Excel files
 │
+├── core/
+│   ├── date_utils.py   — Date/time resolution (all tools pass raw phrases here)
+│   └── gmail_imap.py   — Gmail IMAP polling for auto OTP extraction (M8)
+│
 ├── sites/
 │   ├── lineleader/     — LineLeader / ChildCareCRM integration
-│   └── mystudio/       — MyStudio integration
+│   └── mystudio/       — MyStudio integration (auth, schedules, students, write)
 │
-├── config/settings.py  — All center-specific config (IDs, URLs)
+├── config/settings.py  — All center-specific config (IDs, URLs, credentials)
 ├── logs/               — Operation logs, audit trail, query analytics
 ├── exports/            — Excel files land here
-└── browser_state/      — Cached auth tokens/cookies
+└── browser_state/      — Cached auth tokens/cookies (git-ignored)
 ```
 
 ---
@@ -166,8 +173,8 @@ rm -f browser_state/lineleader_token.json   # clear cached token, force fresh lo
 python3 run_milestone1.py                    # test LineLeader connection directly
 ```
 
-**MyStudio asks for OTP every time**
-That's expected when cookies expire (~30 days). Enter the 6-digit code from the center email in the chat. Cookies are then cached for another 30 days.
+**MyStudio re-authenticates automatically**
+When cookies expire (~30 days), the app reads the OTP from Gmail automatically — no manual entry needed. If Gmail credentials are missing from `.env`, it will fall back to prompting for the code in the chat.
 
 **"No tours today" but tours exist in LineLeader**
 Verify the date — the chatbot uses the system clock. You can ask explicitly: *"Show me tours for June 5"*

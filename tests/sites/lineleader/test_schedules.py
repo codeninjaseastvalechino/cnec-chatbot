@@ -258,8 +258,8 @@ class TestGetUpcomingGbsTours:
 
     def test_returns_tours_sorted_by_time(self):
         items = [
-            self._make_action_item("2026-06-12T22:00:00+00:00", item_id="2"),  # 3pm PDT
-            self._make_action_item("2026-06-12T20:00:00+00:00", item_id="1"),  # 1pm PDT
+            self._make_action_item("2030-06-12T22:00:00+00:00", item_id="2"),  # 3pm PDT
+            self._make_action_item("2030-06-12T20:00:00+00:00", item_id="1"),  # 1pm PDT
         ]
         sessions = self._run([], items)
         assert sessions[0].item_id == "1"
@@ -267,23 +267,23 @@ class TestGetUpcomingGbsTours:
 
     def test_filters_out_non_tours(self):
         items = [
-            self._make_action_item("2026-06-12T20:00:00+00:00", display_type="Meeting"),
-            self._make_action_item("2026-06-12T21:00:00+00:00", display_type="Tour"),
+            self._make_action_item("2030-06-12T20:00:00+00:00", display_type="Meeting"),
+            self._make_action_item("2030-06-12T21:00:00+00:00", display_type="Tour"),
         ]
         sessions = self._run([], items)
         assert len(sessions) == 1
 
     def test_after_date_filter(self):
         items = [
-            self._make_action_item("2026-06-10T20:00:00+00:00", item_id="1"),  # before cutoff
-            self._make_action_item("2026-06-12T20:00:00+00:00", item_id="2"),  # after cutoff
+            self._make_action_item("2030-06-10T20:00:00+00:00", item_id="1"),  # before cutoff
+            self._make_action_item("2030-06-12T20:00:00+00:00", item_id="2"),  # after cutoff
         ]
-        sessions = self._run([], items, after_date="2026-06-11")
+        sessions = self._run([], items, after_date="2030-06-11")
         assert len(sessions) == 1
         assert sessions[0].item_id == "2"
 
     def test_deduplicates_across_today_and_future(self):
-        item = self._make_action_item("2026-06-12T20:00:00+00:00", item_id="99")
+        item = self._make_action_item("2030-06-12T20:00:00+00:00", item_id="99")
         sessions = self._run([item], [item])  # same item in both buckets
         assert len(sessions) == 1
 
@@ -299,16 +299,16 @@ class TestGetUpcomingGbsTours:
         assert self._run([], []) == []
 
     def test_jr_gbs_detected(self):
-        items = [self._make_action_item("2026-06-12T20:00:00+00:00", description="JR GBS")]
+        items = [self._make_action_item("2030-06-12T20:00:00+00:00", description="JR GBS")]
         sessions = self._run([], items)
         assert sessions[0].tour_type == "JR GBS"
 
     def test_boundary_date_excluded_when_cutoff_is_day_after(self):
         # Simulates "after June 16th" → cutoff becomes June 17
         items = [
-            self._make_action_item("2026-06-16T20:00:00+00:00", item_id="1"),  # June 16 — excluded
-            self._make_action_item("2026-06-17T20:00:00+00:00", item_id="2"),  # June 17 — included
+            self._make_action_item("2030-06-16T20:00:00+00:00", item_id="1"),  # June 16 — excluded
+            self._make_action_item("2030-06-17T20:00:00+00:00", item_id="2"),  # June 17 — included
         ]
-        sessions = self._run([], items, after_date="2026-06-17")
+        sessions = self._run([], items, after_date="2030-06-17")
         assert len(sessions) == 1
         assert sessions[0].item_id == "2"
