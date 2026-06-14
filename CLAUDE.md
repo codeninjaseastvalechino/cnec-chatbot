@@ -100,7 +100,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | 4 — Book new appointment | ⬜ Not started | Blocked: requires student-session token not yet solved |
 | 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete | Web UI + multi-provider LLM (Claude/Ollama) |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started | Backlog |
-| 7 — Railway deployment (public launch) | ⬜ Not started | See deployment plan below — open new chat to execute |
+| 7 — Railway deployment (public launch) | ✅ Complete | Live at cnec.up.railway.app; TZ=America/Los_Angeles required for correct timezone filtering |
 | 8 — Auto Gmail OTP extraction | ✅ Complete | Gmail IMAP + app password; auto-extracts code, no human in the loop |
 
 ### Session 2026-06-05 — Milestone 3 + 4 (student lookup + write ops)
