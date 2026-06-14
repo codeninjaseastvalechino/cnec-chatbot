@@ -112,13 +112,16 @@ Bot:  📅 Wednesday, June 3, 2026
 - **LineLeader:** Logs in automatically, token cached for ~1 hour
 - **MyStudio:** Cookie cached for 30 days — when it expires, the app automatically reads the OTP from Gmail and re-authenticates with no manual input needed
 
-### Planned
+### Planned / In Progress
+- ✅ ~~Student lookup by name~~ — live
+- ✅ ~~Create / cancel appointments~~ (single session) — live
+- ✅ ~~Cloud hosting~~ — live at cnec.up.railway.app
 - ⬜ Quick-query shortcut buttons (common queries that skip Claude entirely — faster, free)
-- ⬜ Student lookup by name
-- ⬜ Camp enrollment details
-- ⬜ Create / cancel appointments
-- ⬜ Employee schedule (Homebase)
-- ⬜ Cloud hosting (accessible from anywhere, not just same WiFi)
+- ⬜ Camp enrollment details (Milestone 3b)
+- ⬜ Cancel / move all-future recurring sessions (API gap under investigation)
+- ⬜ Book new appointment (blocked — requires POS-flow token not yet obtainable)
+- ⬜ Employee schedule (Homebase — Milestone 6)
+- ⬜ Features & roadmap panel in the UI (Milestone 9 — deferred until app revamp)
 
 ---
 
@@ -132,8 +135,9 @@ Bot:  📅 Wednesday, June 3, 2026
 | 4 | Cancel / move appointments (single session) | ✅ Complete |
 | 5 | Web chat UI + Claude API + function calling | ✅ Complete |
 | 6 | Employee schedule (Homebase) | ⬜ Backlog |
-| 7 | Railway cloud deployment | ⬜ Not started |
+| 7 | Railway cloud deployment | ✅ Complete — live at cnec.up.railway.app |
 | 8 | Auto Gmail OTP extraction | ✅ Complete |
+| 9 | Features & roadmap panel in the UI | ⏳ Deferred — waiting on app revamp |
 
 ---
 

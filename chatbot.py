@@ -68,7 +68,7 @@ class ChatbotEngine:
         "move_student_session":     "Rescheduling session in MyStudio...",
     }
 
-    def chat(self, user_message: str, status_callback=None) -> str:
+    def chat(self, user_message: str, status_callback=None, user_name: str = "Unknown") -> str:
         """
         Send a message to the LLM and handle tool calls.
 
@@ -86,7 +86,7 @@ class ChatbotEngine:
 
         logger.info("User query: %s", user_message[:120])
         request_start = time.monotonic()
-        _tracker = self._analytics.start_query(user_message, query_type="natural_language")
+        _tracker = self._analytics.start_query(user_message, query_type="natural_language", user=user_name)
 
         self.conversation_history.append({
             "role": "user",

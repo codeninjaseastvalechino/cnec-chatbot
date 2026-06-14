@@ -65,16 +65,19 @@ def index():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>CNEC Chatbot</title>
+        <title>CNEC Studio Assistant</title>
         <style>
             :root {
-                --cn-blue: #0052CC;
-                --cn-orange: #FF6D00;
-                --neutral-light: #F5F5F5;
-                --neutral-bg: #FFFFFF;
-                --text-primary: #1A1A1A;
-                --text-secondary: #666666;
-                --border-color: #E0E0E0;
+                --cn-orange: #d96d32;
+                --cn-orange-hover: #bf5a25;
+                --cn-navy: #162044;
+                --cn-navy-deep: #0f1a35;
+                --cn-navy-card: #1a2a4a;
+                --cn-navy-border: #243356;
+                --cn-gold: #eabb5c;
+                --text-primary: #e8edf8;
+                --text-secondary: #8ea4c8;
+                --text-muted: #5a7aaa;
             }
 
             * {
@@ -83,24 +86,22 @@ def index():
                 box-sizing: border-box;
             }
 
+            html, body {
+                height: 100%;
+            }
+
             body {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-                background: linear-gradient(135deg, #f5f7fa 0%, #e9ecef 100%);
-                min-height: 100vh;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                padding: 20px;
+                background: #0a1020;
+                height: 100vh;
+                margin: 0;
+                overflow: hidden;
             }
 
             .container {
                 width: 100%;
-                max-width: 1200px;
-                height: 90vh;
-                max-height: 700px;
-                background: var(--neutral-bg);
-                border-radius: 12px;
-                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+                height: 100vh;
+                background: var(--cn-navy-deep);
                 display: flex;
                 flex-direction: row;
                 overflow: hidden;
@@ -116,8 +117,8 @@ def index():
             .sidebar {
                 width: 220px;
                 flex-shrink: 0;
-                background: var(--neutral-light);
-                border-left: 1px solid var(--border-color);
+                background: var(--cn-navy);
+                border-left: 1px solid var(--cn-navy-border);
                 padding: 16px 12px;
                 display: flex;
                 flex-direction: column;
@@ -126,20 +127,20 @@ def index():
             }
 
             .sidebar h3 {
-                font-size: 11px;
+                font-size: 10px;
                 font-weight: 700;
                 text-transform: uppercase;
-                letter-spacing: 0.08em;
-                color: var(--text-secondary);
+                letter-spacing: 0.1em;
+                color: var(--cn-gold);
                 margin: 0 0 4px 0;
             }
 
             .quick-btn {
                 width: 100%;
                 padding: 9px 12px;
-                background: white;
+                background: var(--cn-navy-card);
                 color: var(--text-primary);
-                border: 1px solid var(--border-color);
+                border: 1px solid var(--cn-navy-border);
                 border-radius: 8px;
                 font-size: 13px;
                 font-weight: 500;
@@ -152,16 +153,16 @@ def index():
             }
 
             .quick-btn:hover:not(:disabled) {
-                background: var(--cn-blue);
+                background: var(--cn-orange);
                 color: white;
-                border-color: var(--cn-blue);
+                border-color: var(--cn-orange);
                 transform: none;
                 box-shadow: none;
             }
 
             .sidebar-divider {
                 height: 1px;
-                background: var(--border-color);
+                background: var(--cn-navy-border);
                 margin: 4px 0;
             }
 
@@ -170,31 +171,35 @@ def index():
             }
 
             .header {
-                background: linear-gradient(135deg, var(--cn-blue) 0%, #003d99 100%);
+                background: var(--cn-navy);
+                border-bottom: 1px solid var(--cn-navy-border);
                 color: white;
-                padding: 20px;
+                padding: 22px 32px;
                 display: flex;
                 align-items: center;
-                gap: 16px;
+                justify-content: center;
+                gap: 20px;
                 flex-shrink: 0;
             }
 
-            .header img {
-                height: 50px;
-                width: auto;
-                object-fit: contain;
+.header-text {
+                text-align: left;
             }
 
             .header-text h1 {
-                font-size: 24px;
-                font-weight: 600;
+                font-size: 30px;
+                font-weight: 800;
                 margin: 0;
+                color: #ffffff;
+                letter-spacing: -0.5px;
+                line-height: 1;
             }
 
             .header-text p {
-                font-size: 12px;
-                opacity: 0.9;
-                margin: 4px 0 0 0;
+                font-size: 13px;
+                color: var(--cn-gold);
+                margin: 5px 0 0 0;
+                letter-spacing: 0.03em;
             }
 
             #chat {
@@ -204,7 +209,12 @@ def index():
                 display: flex;
                 flex-direction: column;
                 gap: 12px;
+                background: var(--cn-navy-deep);
             }
+
+            #chat::-webkit-scrollbar { width: 6px; }
+            #chat::-webkit-scrollbar-track { background: transparent; }
+            #chat::-webkit-scrollbar-thumb { background: var(--cn-navy-border); border-radius: 3px; }
 
             .message {
                 display: flex;
@@ -212,14 +222,8 @@ def index():
             }
 
             @keyframes slideIn {
-                from {
-                    opacity: 0;
-                    transform: translateY(10px);
-                }
-                to {
-                    opacity: 1;
-                    transform: translateY(0);
-                }
+                from { opacity: 0; transform: translateY(10px); }
+                to { opacity: 1; transform: translateY(0); }
             }
 
             .message.user {
@@ -227,20 +231,22 @@ def index():
             }
 
             .message.user .bubble {
-                background: var(--cn-blue);
+                background: var(--cn-orange);
                 color: white;
                 border-radius: 18px 18px 4px 18px;
             }
 
             .message.assistant .bubble {
-                background: var(--neutral-light);
+                background: var(--cn-navy-card);
+                border: 1px solid var(--cn-navy-border);
                 color: var(--text-primary);
                 border-radius: 18px 18px 18px 4px;
             }
 
             .message.error .bubble {
-                background: #FFE0E0;
-                color: #C41C3B;
+                background: #3d1a1a;
+                border: 1px solid #6b2222;
+                color: #f87171;
                 border-radius: 18px;
             }
 
@@ -255,7 +261,7 @@ def index():
             }
 
             .bubble a {
-                color: var(--cn-blue);
+                color: var(--cn-gold);
                 text-decoration: underline;
                 cursor: pointer;
             }
@@ -284,16 +290,18 @@ def index():
             }
 
             .bubble table th {
-                background: rgba(0, 0, 0, 0.05);
+                background: rgba(255, 255, 255, 0.05);
                 padding: 8px;
                 text-align: left;
                 font-weight: 600;
-                border-bottom: 2px solid rgba(0, 0, 0, 0.1);
+                color: var(--cn-gold);
+                border-bottom: 1px solid var(--cn-navy-border);
             }
 
             .bubble table td {
                 padding: 8px;
-                border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+                border-bottom: 1px solid var(--cn-navy-border);
+                color: var(--text-primary);
             }
 
             .bubble table tr:last-child td {
@@ -307,7 +315,8 @@ def index():
                 color: var(--text-secondary);
                 font-size: 13px;
                 padding: 12px 16px;
-                background: var(--neutral-light);
+                background: var(--cn-navy-card);
+                border: 1px solid var(--cn-navy-border);
                 border-radius: 18px;
             }
 
@@ -320,33 +329,22 @@ def index():
                 width: 6px;
                 height: 6px;
                 border-radius: 50%;
-                background: var(--text-secondary);
+                background: var(--cn-orange);
                 animation: bounce 1.4s infinite;
             }
 
-            .dot:nth-child(2) {
-                animation-delay: 0.2s;
-            }
-
-            .dot:nth-child(3) {
-                animation-delay: 0.4s;
-            }
+            .dot:nth-child(2) { animation-delay: 0.2s; }
+            .dot:nth-child(3) { animation-delay: 0.4s; }
 
             @keyframes bounce {
-                0%, 60%, 100% {
-                    opacity: 0.6;
-                    transform: translateY(0);
-                }
-                30% {
-                    opacity: 1;
-                    transform: translateY(-8px);
-                }
+                0%, 60%, 100% { opacity: 0.4; transform: translateY(0); }
+                30% { opacity: 1; transform: translateY(-6px); }
             }
 
             .input-area {
                 padding: 16px 20px;
-                background: var(--neutral-bg);
-                border-top: 1px solid var(--border-color);
+                background: var(--cn-navy);
+                border-top: 1px solid var(--cn-navy-border);
                 display: flex;
                 gap: 12px;
                 flex-shrink: 0;
@@ -355,96 +353,189 @@ def index():
             #message {
                 flex: 1;
                 padding: 12px 16px;
-                border: 1px solid var(--border-color);
+                border: 1px solid var(--cn-navy-border);
                 border-radius: 24px;
                 font-size: 14px;
                 font-family: inherit;
                 outline: none;
                 transition: all 0.2s;
+                background: var(--cn-navy-deep);
+                color: var(--text-primary);
             }
 
+            #message::placeholder { color: var(--text-muted); }
+
             #message:focus {
-                border-color: var(--cn-blue);
-                box-shadow: 0 0 0 3px rgba(0, 82, 204, 0.1);
+                border-color: var(--cn-orange);
+                box-shadow: 0 0 0 3px rgba(217, 109, 50, 0.15);
             }
 
             #message:disabled {
-                background: var(--neutral-light);
+                background: var(--cn-navy-card);
                 cursor: not-allowed;
-                opacity: 0.6;
+                opacity: 0.5;
             }
 
             button {
                 padding: 12px 28px;
-                background: var(--cn-blue);
+                background: var(--cn-orange);
                 color: white;
                 border: none;
                 border-radius: 24px;
                 font-size: 14px;
-                font-weight: 600;
+                font-weight: 700;
                 cursor: pointer;
                 transition: all 0.2s;
                 flex-shrink: 0;
             }
 
             button:hover:not(:disabled) {
-                background: var(--cn-orange);
-                transform: translateY(-2px);
-                box-shadow: 0 4px 12px rgba(255, 109, 0, 0.3);
+                background: var(--cn-orange-hover);
+                transform: translateY(-1px);
+                box-shadow: 0 4px 14px rgba(217, 109, 50, 0.4);
             }
-
 
             button:active:not(:disabled) {
                 transform: translateY(0);
             }
 
             button:disabled {
-                background: #CCCCCC;
+                background: var(--cn-navy-card);
+                color: var(--text-muted);
                 cursor: not-allowed;
                 opacity: 0.6;
             }
 
             .feature-request-btn {
-                background: #f59e0b;
+                background: #1a3a1a;
+                border: 1px solid #2d5a2d;
+                color: #6fcf97;
                 width: 100%;
             }
             .feature-request-btn:hover:not(:disabled) {
-                background: #d97706;
-                box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+                background: #2d5a2d;
+                color: white;
+                border-color: #6fcf97;
+                box-shadow: none;
+                transform: none;
             }
 
+            .help-row {
+                display: flex;
+                gap: 12px;
+                align-items: baseline;
+                padding: 8px 0;
+                border-bottom: 1px solid #243356;
+            }
+            .help-feature {
+                font-size: 13px;
+                font-weight: 600;
+                color: #e8edf8;
+                min-width: 220px;
+                flex-shrink: 0;
+            }
+            .help-examples {
+                font-size: 12px;
+                color: #8ea4c8;
+                line-height: 1.6;
+            }
+            .help-ex {
+                color: #d96d32;
+                cursor: pointer;
+                font-style: italic;
+            }
+            .help-ex:hover { text-decoration: underline; color: #eabb5c; }
+            .help-note {
+                font-size: 12px;
+                color: #5a7aaa;
+                font-style: italic;
+                line-height: 1.5;
+            }
+
+            .chat-panel { position: relative; }
+
             @media (max-width: 768px) {
-                .container {
-                    max-height: 100%;
-                    border-radius: 0;
-                }
-                .bubble {
-                    max-width: 90%;
-                }
-                .header h1 {
-                    font-size: 20px;
-                }
-                .header img {
-                    height: 40px;
-                }
+                .bubble { max-width: 90%; }
+                .header-text h1 { font-size: 18px; }
+                .header img { height: 36px; }
             }
         </style>
     </head>
     <body>
+        <!-- Who are you modal -->
+        <div id="nameModal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:200;display:flex;align-items:center;justify-content:center;">
+            <div style="background:#162044;border:1px solid #243356;border-radius:16px;padding:36px 40px;width:360px;text-align:center;">
+                <div style="font-size:32px;margin-bottom:12px;">👋</div>
+                <h2 style="font-size:20px;font-weight:700;color:#ffffff;margin:0 0 6px;">Who's using the assistant?</h2>
+                <p style="font-size:13px;color:#eabb5c;margin:0 0 24px;">Select your name to get started</p>
+                <select id="staffName" style="width:100%;padding:12px 14px;background:#0f1a35;border:1px solid #243356;border-radius:8px;color:#e8edf8;font-size:15px;font-family:inherit;margin-bottom:20px;outline:none;cursor:pointer;">
+                    <option value="">— Select your name —</option>
+                    <option>Daniel</option>
+                    <option>Devin</option>
+                    <option>Jayesh</option>
+                    <option>Kelsey</option>
+                    <option>Nameera</option>
+                    <option>Nia</option>
+                    <option>Prashant</option>
+                    <option>Reace</option>
+                    <option>Steven</option>
+                    <option>Venay</option>
+                    <option>Vinaya</option>
+                </select>
+                <button id="startBtn" onclick="confirmName()" style="width:100%;padding:13px;border-radius:8px;background:#d96d32;color:white;font-size:15px;font-weight:700;border:none;cursor:pointer;">Let's go</button>
+            </div>
+        </div>
+
         <div class="container">
             <div class="chat-panel">
                 <div class="header">
-                    <img src="/asset/cnec-logo.jpeg" alt="Code Ninjas Eastvale Chino Logo">
+                    <img src="/asset/cnec-logo.jpeg" alt="Code Ninjas Eastvale Chino Logo" style="height:56px; width:auto; object-fit:contain; border-radius:8px;">
                     <div class="header-text">
-                        <h1>GBS Tour Assistant</h1>
-                        <p>Code Ninjas Eastvale Chino</p>
+                        <h1>CNEC Studio Assistant</h1>
+                        <p>An AI assistant for all your center operations</p>
+                    </div>
+                    <button id="helpBtn" onclick="toggleHelp()" title="What can I ask?" style="margin-left:auto;padding:8px 16px;border-radius:20px;font-size:13px;font-weight:600;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:white;cursor:pointer;flex-shrink:0;">? What can I ask</button>
+                </div>
+
+                <!-- Help Modal -->
+                <div id="helpModal" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100;overflow-y:auto;">
+                    <div style="max-width:680px;margin:40px auto;background:#162044;border:1px solid #243356;border-radius:16px;padding:32px;position:relative;">
+                        <button onclick="toggleHelp()" style="position:absolute;top:16px;right:16px;background:transparent;border:none;color:#8ea4c8;font-size:20px;cursor:pointer;padding:4px 8px;border-radius:4px;">✕</button>
+                        <h2 style="font-size:20px;font-weight:700;color:#ffffff;margin:0 0 4px;">What can I ask?</h2>
+                        <p style="font-size:13px;color:#eabb5c;margin:0 0 24px;">Click any example to send it directly.</p>
+
+                        <!-- Live now -->
+                        <div style="margin-bottom:24px;">
+                            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;background:#14532d;color:#86efac;padding:4px 10px;border-radius:4px;display:inline-block;margin-bottom:12px;">Live now</div>
+                            <div class="help-row"><span class="help-feature">Full daily schedule</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Show me today\'s full schedule"</span> · <span class="help-ex" onclick="helpSend(this)">"What\'s on Friday?"</span></span></div>
+                            <div class="help-row"><span class="help-feature">GBS &amp; JR GBS tours</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Any GBS tours tomorrow?"</span> · <span class="help-ex" onclick="helpSend(this)">"List upcoming tours this week"</span></span></div>
+                            <div class="help-row"><span class="help-feature">Reschedule a tour</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Reschedule the 3pm tour to 4:30"</span> · <span class="help-ex" onclick="helpSend(this)">"Move Wittie Hughes to Thursday at 5"</span></span></div>
+                            <div class="help-row"><span class="help-feature">Student lookup</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Look up Veshant Bhatia"</span> · <span class="help-ex" onclick="helpSend(this)">"What sessions does Alex have coming up?"</span></span></div>
+                            <div class="help-row"><span class="help-feature">Cancel a session (single)</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Cancel Alex\'s session on June 20"</span></span></div>
+                            <div class="help-row"><span class="help-feature">Move a session (single)</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Move Alex\'s June 18 class to June 20 at 3pm"</span></span></div>
+                            <div class="help-row" style="border-bottom:none;"><span class="help-feature">Excel export</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Download today\'s schedule as Excel"</span> · <span class="help-ex" onclick="helpSend(this)">"Export Friday\'s tours"</span></span></div>
+                        </div>
+
+                        <!-- Coming soon -->
+                        <div style="margin-bottom:24px;">
+                            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;background:#1e3a5f;color:#93c5fd;padding:4px 10px;border-radius:4px;display:inline-block;margin-bottom:12px;">Coming soon</div>
+                            <div class="help-row"><span class="help-feature">Camp enrollment details</span><span class="help-note">API discovery in progress (M3b)</span></div>
+                            <div class="help-row" style="border-bottom:none;"><span class="help-feature">Instant quick-query shortcuts</span><span class="help-note">Sidebar buttons will bypass Claude for faster responses</span></div>
+                        </div>
+
+                        <!-- Known limitations -->
+                        <div>
+                            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;background:#451a03;color:#fcd34d;padding:4px 10px;border-radius:4px;display:inline-block;margin-bottom:12px;">Known limitations</div>
+                            <div class="help-row"><span class="help-feature">Cancel/move all future recurring sessions</span><span class="help-note">API returns success but only affects the targeted session — under investigation</span></div>
+                            <div class="help-row" style="border-bottom:none;"><span class="help-feature">Book a new appointment</span><span class="help-note">Blocked — requires a student token only available through the POS, not staff login</span></div>
+                        </div>
                     </div>
                 </div>
 
                 <div id="chat"></div>
 
                 <div class="input-area">
-                    <input type="text" id="message" placeholder="Ask about tours or schedule..." autocomplete="off">
+                    <input type="text" id="message" placeholder="Ask me anything about students, tours, schedules..." autocomplete="off">
                     <button id="sendBtn" onclick="sendMessage();">Send</button>
                 </div>
             </div>
@@ -453,18 +544,10 @@ def index():
                 <h3>Quick Actions</h3>
                 <button class="quick-btn" onclick="quickSend('What is my full schedule today?')">📅 Full schedule today</button>
                 <button class="quick-btn" onclick="quickSend('What GBS tours are scheduled today?')">🎮 Today\'s GBS tours</button>
-                <button class="quick-btn" onclick="quickSend('Are there any JR GBS tours today?')">👶 JR GBS tours</button>
-                <button class="quick-btn" onclick="quickSend('Download today\'s schedule as Excel')">📥 Download Excel</button>
 
                 <div class="sidebar-divider"></div>
                 <h3>Schedule</h3>
-                <button class="quick-btn" onclick="quickSend('What is on the schedule for 3:00 PM?')">⏰ 3:00 PM slot</button>
                 <button class="quick-btn" onclick="quickSend('How many students are coming today?')">👥 Student count</button>
-
-                <div class="sidebar-divider"></div>
-                <h3>Tours</h3>
-                <button class="quick-btn" onclick="quickSend('How many tours are scheduled today?')">📊 Tour summary</button>
-                <button class="quick-btn" onclick="quickSend('I need to reschedule a tour')">🔄 Reschedule tour</button>
 
                 <div class="sidebar-divider"></div>
                 <h3>Feedback</h3>
@@ -474,6 +557,16 @@ def index():
 
         <script>
         let isProcessing = false;
+
+        function confirmName() {
+            const name = document.getElementById('staffName').value;
+            if (!name) { document.getElementById('staffName').style.borderColor = '#d96d32'; return; }
+            sessionStorage.setItem('staffName', name);
+            document.getElementById('nameModal').style.display = 'none';
+        }
+
+        // Always clear name on page load so modal shows every time
+        sessionStorage.removeItem('staffName');
 
         function quickSend(text) {
             if (isProcessing) return;
@@ -489,6 +582,24 @@ def index():
             input.focus();
             input.setSelectionRange(input.value.length, input.value.length);
         }
+
+        function toggleHelp() {
+            const modal = document.getElementById('helpModal');
+            modal.style.display = modal.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function helpSend(el) {
+            const text = el.textContent.replace(/^"|"$/g, '');
+            toggleHelp();
+            if (isProcessing) return;
+            const input = document.getElementById('message');
+            input.value = text;
+            sendMessage();
+        }
+
+        document.getElementById('helpModal').addEventListener('click', function(e) {
+            if (e.target === this) toggleHelp();
+        });
 
         function parseMarkdownLinks(text) {
             return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
@@ -538,7 +649,7 @@ def index():
             fetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message })
+                body: JSON.stringify({ message, user_name: sessionStorage.getItem('staffName') || 'Unknown' })
             }).then(r => r.json()).then(data => {
                 thinkingMsg.remove();
                 if (data.error) {
@@ -591,11 +702,11 @@ def index():
 FEATURE_REQUESTS_FILE = Path("logs/feature_requests.jsonl")
 
 
-def _save_feature_request(text: str) -> None:
+def _save_feature_request(text: str, user: str = "Unknown") -> None:
     FEATURE_REQUESTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(FEATURE_REQUESTS_FILE, "a") as f:
-        f.write(json.dumps({"ts": datetime.utcnow().isoformat(), "request": text}) + "\n")
-    logger.info("Feature request saved: %s", text)
+        f.write(json.dumps({"ts": datetime.utcnow().isoformat(), "user": user, "request": text}) + "\n")
+    logger.info("Feature request saved by %s: %s", user, text)
 
 
 @app.route("/api/feature-requests", methods=["GET"])
@@ -620,17 +731,18 @@ def chat():
     """Handle chat messages, streaming SSE status updates then final response."""
     data = request.json
     user_message = data.get("message", "").strip()
+    user_name = data.get("user_name", "Unknown").strip()
 
     if not user_message:
         return jsonify({"error": "Empty message"}), 400
 
-    audit.log_event("user_message", {"message": user_message})
+    audit.log_event("user_message", {"message": user_message, "user": user_name})
 
     # Feature request — save to file and return immediately, no Claude call needed
     if user_message.upper().startswith("FEATURE REQUEST:"):
         request_text = user_message[len("FEATURE REQUEST:"):].strip()
         if request_text:
-            _save_feature_request(request_text)
+            _save_feature_request(request_text, user=user_name)
             return jsonify({
                 "response": "✅ Thanks for the feedback! Your feature request has been saved and will be reviewed.",
                 "statuses": []
@@ -643,12 +755,12 @@ def chat():
 
     try:
         statuses = []
-        response_text = chatbot.chat(user_message, status_callback=lambda msg: statuses.append(msg))
-        audit.log_event("assistant_response", {"message": response_text})
+        response_text = chatbot.chat(user_message, status_callback=lambda msg: statuses.append(msg), user_name=user_name)
+        audit.log_event("assistant_response", {"message": response_text, "user": user_name})
         return jsonify({"response": response_text, "statuses": statuses})
     except Exception as e:
         logger.error("Chat error: %s", e)
-        audit.log_event("error", {"error": str(e)})
+        audit.log_event("error", {"error": str(e), "user": user_name})
         return jsonify({"error": str(e)}), 500
 
 
@@ -675,7 +787,7 @@ def get_analytics():
             "top_intents": analytics.top_intents(limit=10),
             "top_tools":   analytics.top_tools(limit=10),
             "top_queries": analytics.top_queries(limit=10),
-            "recent":      analytics.recent(limit=int(request.args.get("recent", 20))),
+            "recent":      analytics.recent(limit=int(request.args.get("recent", 50))),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -761,10 +873,11 @@ def admin():
         if (!fr.requests || fr.requests.length === 0) {{
             frEl.innerHTML = '<p class="empty">No feature requests yet.</p>';
         }} else {{
-            const rows = fr.requests.slice().reverse().map(r =>
-                `<tr><td style="color:#999;white-space:nowrap">${{r.ts.replace('T',' ').slice(0,16)}} UTC</td><td>${{r.request}}</td></tr>`
-            ).join('');
-            frEl.innerHTML = `<table><thead><tr><th>Submitted</th><th>Request</th></tr></thead><tbody>${{rows}}</tbody></table>`;
+            const rows = fr.requests.slice().reverse().map(r => {{
+                const ts = new Date(r.ts + (r.ts.endsWith('Z') ? '' : 'Z')).toLocaleString('en-US', {{timeZone:'America/Los_Angeles',month:'2-digit',day:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit',hour12:true}});
+                return `<tr><td style="color:#999;white-space:nowrap">${{ts}} PT</td><td><span class="badge" style="background:#fef3c7;color:#92400e">${{r.user||'Unknown'}}</span></td><td>${{r.request}}</td></tr>`;
+            }}).join('');
+            frEl.innerHTML = `<table><thead><tr><th>Submitted</th><th>User</th><th>Request</th></tr></thead><tbody>${{rows}}</tbody></table>`;
         }}
 
         // Analytics
@@ -794,18 +907,20 @@ def admin():
         if (!an.recent || an.recent.length === 0) {{
             recentEl.innerHTML = '<p class="empty">No activity yet.</p>';
         }} else {{
-            const rows = an.recent.slice().reverse().map(r => {{
-                const ts = (r.timestamp||'').slice(0,16).replace('T',' ');
+            const rows = an.recent.map(r => {{
+                const ts = r.timestamp ? new Date(r.timestamp + (r.timestamp.endsWith('Z') ? '' : 'Z')).toLocaleString('en-US', {{timeZone:'America/Los_Angeles',month:'2-digit',day:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit',hour12:true}}) : '';
                 const tools = (r.tools||[]).map(t => t.name).join(', ') || '—';
                 const dur = r.total_duration_s ? (r.total_duration_s.toFixed(1)+'s') : '';
+                const user = r.user || '—';
                 return `<tr>
-                    <td style="color:#999;white-space:nowrap">${{ts}} UTC</td>
+                    <td style="color:#999;white-space:nowrap">${{ts}} PT</td>
+                    <td><span class="badge" style="background:#fef3c7;color:#92400e">${{user}}</span></td>
                     <td>${{r.query||''}}</td>
                     <td><span class="badge">${{tools}}</span></td>
                     <td style="color:#999">${{dur}}</td>
                 </tr>`;
             }}).join('');
-            recentEl.innerHTML = `<table><thead><tr><th>Time</th><th>Query</th><th>Tool</th><th>Duration</th></tr></thead><tbody>${{rows}}</tbody></table>`;
+            recentEl.innerHTML = `<table><thead><tr><th>Time</th><th>User</th><th>Query</th><th>Tool</th><th>Duration</th></tr></thead><tbody>${{rows}}</tbody></table>`;
         }}
     }}
     load();

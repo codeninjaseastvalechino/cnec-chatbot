@@ -20,7 +20,7 @@ class MockChatbotEngine:
         self.conversation_history = []
         self.call_count = 0
 
-    def chat(self, user_message: str, status_callback=None) -> str:
+    def chat(self, user_message: str, status_callback=None, user_name: str = "Unknown") -> str:
         """
         Simulate a chat response with realistic tour data.
         Includes a slight delay to simulate API processing.

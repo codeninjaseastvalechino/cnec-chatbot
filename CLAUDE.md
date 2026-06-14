@@ -87,7 +87,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ## Current Status
 
-**Last updated: 2026-06-13**
+**Last updated: 2026-06-14**
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
@@ -102,6 +102,47 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started | Backlog |
 | 7 — Railway deployment (public launch) | ✅ Complete | Live at cnec.up.railway.app; TZ=America/Los_Angeles required for correct timezone filtering |
 | 8 — Auto Gmail OTP extraction | ✅ Complete | Gmail IMAP + app password; auto-extracts code, no human in the loop |
+| 9 — Features & roadmap panel in UI | ⏳ Deferred | Waiting on app revamp — see planning notes below |
+
+### Milestone 9 — Features & roadmap panel (deferred — pending app revamp)
+
+**Goal:** Show users what they can do right now and what is coming, directly inside the app UI — so they don't request features already in the pipeline.
+
+**Why deferred:** The app UI is being revamped. Implementing M9 before the revamp risks duplicate or conflicting work. Resume this milestone once the new UI structure is settled.
+
+**Planned scope (agreed 2026-06-14):**
+
+- A "What can I ask?" section visible in the UI (sidebar section or help modal — TBD based on new UI layout)
+- Three tiers of content:
+  - **Live now** — features users can use immediately, each with example queries
+  - **Coming soon** — in-progress or planned features (sets expectations, reduces redundant requests)
+  - **Known gaps** — partial features (all-future recurring ops, book new appointment) with a plain-English note on why they're limited — staff-facing only, or omit from public view
+- Content derived from the feature inventory below; keep in sync with milestone status table above
+
+**Feature inventory for panel content (as of 2026-06-14):**
+
+| Feature | Status | Example queries |
+|---------|--------|-----------------|
+| Full daily schedule (LineLeader + MyStudio merged) | Live | "Show me today's full schedule", "What's on Friday?" |
+| GBS & JR GBS tours with child names, ages, staff | Live | "Any GBS tours tomorrow?", "List upcoming tours this week" |
+| Reschedule a tour | Live | "Reschedule the 3pm tour to 4:30", "Move Wittie Hughes to Thursday at 5" |
+| Student lookup by name | Live | "Look up Veshant Bhatia", "What sessions does Alex have coming up?" |
+| Cancel a student session (single) | Live | "Cancel Alex's session on June 20" |
+| Move a student session (single) | Live | "Move Alex's June 18 class to June 20 at 3pm" |
+| Excel export of any schedule | Live | "Download today's schedule as Excel", "Export Friday's tours" |
+| Cancel / move all-future recurring sessions | Partial — API gap | Returns success but only affects the targeted occurrence; root cause under investigation |
+| Book a new appointment | Blocked | Requires POS-flow student token not obtainable via staff login |
+| Camp enrollment details | Coming (M3b) | Needs API discovery session first |
+| Employee schedule (Homebase) | Coming (M6) | Homebase integration not yet started |
+| Quick-query shortcuts bypassing Claude | Coming | Sidebar buttons currently still go through Claude; true bypass planned |
+
+**Implementation notes (for when work resumes):**
+- Do NOT implement until the app revamp layout is finalized — placement (sidebar vs. modal) depends on the new structure
+- Keep the feature list in the panel driven from a data structure, not hardcoded strings, so it stays in sync as milestones complete
+- "Partial" and "blocked" items: show to staff (they manage expectations); consider hiding from any future customer-facing view
+- No new Python modules needed — this is purely a frontend/template change to `app.py`
+
+---
 
 ### Session 2026-06-05 — Milestone 3 + 4 (student lookup + write ops)
 

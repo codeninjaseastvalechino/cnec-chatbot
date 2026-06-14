@@ -48,7 +48,7 @@ class QueryAnalytics:
         self.log_file = Path(log_dir) / "query_analytics.jsonl"
         self.log_file.parent.mkdir(exist_ok=True)
 
-    def start_query(self, query: str, query_type: str = "natural_language") -> "QueryTracker":
+    def start_query(self, query: str, query_type: str = "natural_language", user: str = "Unknown") -> "QueryTracker":
         """
         Begin tracking a new query. Returns a QueryTracker to record tools + finish.
 
@@ -56,7 +56,7 @@ class QueryAnalytics:
           "natural_language" — user typed free text, routed through Claude
           "quick_query"      — user clicked a shortcut button, tool called directly (future)
         """
-        return QueryTracker(query=query, query_type=query_type, log_file=self.log_file)
+        return QueryTracker(query=query, query_type=query_type, log_file=self.log_file, user=user)
 
     def top_queries(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Return the most frequently seen query strings (case-insensitive)."""
@@ -180,12 +180,13 @@ class QueryTracker:
     Call record_tool() for each tool used, then finish() when done.
     """
 
-    def __init__(self, query: str, query_type: str, log_file: Path):
+    def __init__(self, query: str, query_type: str, log_file: Path, user: str = "Unknown"):
         self._query = query
         self._query_type = query_type
         self._log_file = log_file
-        self._started_at = datetime.now()
+        self._started_at = datetime.utcnow()
         self._tools: List[Dict[str, Any]] = []
+        self._user = user
 
     def record_tool(self, name: str, inputs: Dict[str, Any], duration_s: float) -> None:
         """Record a tool call that happened during this query."""
@@ -197,9 +198,10 @@ class QueryTracker:
 
     def finish(self, response_chars: int = 0) -> None:
         """Write the completed entry to the analytics log."""
-        total_s = (datetime.now() - self._started_at).total_seconds()
+        total_s = (datetime.utcnow() - self._started_at).total_seconds()
         entry = {
-            "timestamp": self._started_at.isoformat(timespec="seconds"),
+            "timestamp": self._started_at.isoformat(timespec="seconds") + "Z",
+            "user": self._user,
             "query": self._query,
             "query_type": self._query_type,
             "tools": self._tools,
