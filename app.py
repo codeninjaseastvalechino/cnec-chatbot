@@ -890,4 +890,5 @@ if __name__ == "__main__":
     import logging
     logging.basicConfig(level=logging.INFO)
     # Bind to 0.0.0.0 to allow connections from other machines on the network
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    port = int(os.getenv("PORT", 5001))
+    app.run(host="0.0.0.0", port=port, debug=False)
