@@ -21,6 +21,7 @@ from flask import Flask, request, jsonify, send_file, Response, stream_with_cont
 from datetime import datetime
 from audit_log import AuditLogger
 from analytics import QueryAnalytics
+from config.settings import settings
 
 app = Flask(__name__)
 audit = AuditLogger()
@@ -678,6 +679,139 @@ def get_analytics():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin")
+def admin():
+    """Password-protected admin dashboard — feature requests, analytics, recent queries."""
+    password = request.args.get("pw", "")
+    if password != settings.ADMIN_PASSWORD:
+        return """
+        <html><head><title>Admin Login</title>
+        <style>
+            body { font-family: sans-serif; display: flex; align-items: center;
+                   justify-content: center; height: 100vh; margin: 0; background: #f3f4f6; }
+            form { background: white; padding: 32px; border-radius: 12px;
+                   box-shadow: 0 4px 16px rgba(0,0,0,0.1); text-align: center; }
+            h2 { margin: 0 0 20px; color: #1a1a2e; }
+            input { padding: 10px 16px; border: 1px solid #ddd; border-radius: 8px;
+                    font-size: 14px; margin-right: 8px; }
+            button { padding: 10px 20px; background: #FF6D00; color: white;
+                     border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        </style></head><body>
+        <form method="get">
+            <h2>🔐 Admin Login</h2>
+            <input type="password" name="pw" placeholder="Password" autofocus>
+            <button type="submit">Enter</button>
+        </form></body></html>
+        """, 401
+
+    return f"""
+    <html><head><title>CNEC Admin</title>
+    <style>
+        body {{ font-family: sans-serif; margin: 0; background: #f3f4f6; color: #1a1a2e; }}
+        .header {{ background: #1a1a2e; color: white; padding: 16px 32px;
+                   display: flex; align-items: center; gap: 12px; }}
+        .header h1 {{ margin: 0; font-size: 20px; }}
+        .container {{ max-width: 1100px; margin: 32px auto; padding: 0 24px; }}
+        .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }}
+        .card {{ background: white; border-radius: 12px; padding: 24px;
+                 box-shadow: 0 2px 8px rgba(0,0,0,0.07); }}
+        .card h2 {{ margin: 0 0 16px; font-size: 16px; color: #FF6D00; }}
+        .card.full {{ grid-column: 1 / -1; }}
+        table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+        th {{ text-align: left; padding: 8px; background: #f3f4f6;
+              border-bottom: 2px solid #e5e7eb; }}
+        td {{ padding: 8px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }}
+        tr:last-child td {{ border-bottom: none; }}
+        .empty {{ color: #999; font-style: italic; padding: 12px 0; }}
+        .badge {{ display: inline-block; background: #e0f2fe; color: #0369a1;
+                  border-radius: 12px; padding: 2px 8px; font-size: 11px; }}
+        .refresh {{ float: right; font-size: 12px; color: #999; }}
+    </style></head><body>
+    <div class="header">
+        <h1>CNEC Admin Dashboard</h1>
+        <span style="margin-left: auto; font-size: 13px; opacity: 0.7;">Code Ninjas Eastvale Chino</span>
+    </div>
+    <div class="container">
+        <div class="grid">
+            <div class="card full" id="feature-requests">
+                <h2>💡 Feature Requests <span class="refresh"><a href="/admin?pw={password}">↻ Refresh</a></span></h2>
+                <div id="fr-content">Loading...</div>
+            </div>
+            <div class="card" id="top-tools">
+                <h2>🔧 Most Used Tools</h2>
+                <div id="tools-content">Loading...</div>
+            </div>
+            <div class="card" id="top-queries">
+                <h2>💬 Most Common Queries</h2>
+                <div id="queries-content">Loading...</div>
+            </div>
+            <div class="card full" id="recent-queries">
+                <h2>🕐 Recent Activity</h2>
+                <div id="recent-content">Loading...</div>
+            </div>
+        </div>
+    </div>
+    <script>
+    async function load() {{
+        // Feature requests
+        const fr = await fetch('/api/feature-requests').then(r => r.json());
+        const frEl = document.getElementById('fr-content');
+        if (!fr.requests || fr.requests.length === 0) {{
+            frEl.innerHTML = '<p class="empty">No feature requests yet.</p>';
+        }} else {{
+            const rows = fr.requests.slice().reverse().map(r =>
+                `<tr><td style="color:#999;white-space:nowrap">${{r.ts.replace('T',' ').slice(0,16)}} UTC</td><td>${{r.request}}</td></tr>`
+            ).join('');
+            frEl.innerHTML = `<table><thead><tr><th>Submitted</th><th>Request</th></tr></thead><tbody>${{rows}}</tbody></table>`;
+        }}
+
+        // Analytics
+        const an = await fetch('/api/analytics').then(r => r.json());
+
+        const toolsEl = document.getElementById('tools-content');
+        if (!an.top_tools || an.top_tools.length === 0) {{
+            toolsEl.innerHTML = '<p class="empty">No data yet.</p>';
+        }} else {{
+            const rows = an.top_tools.map(t =>
+                `<tr><td>${{t.tool}}</td><td><span class="badge">${{t.count}}</span></td></tr>`
+            ).join('');
+            toolsEl.innerHTML = `<table><thead><tr><th>Tool</th><th>Calls</th></tr></thead><tbody>${{rows}}</tbody></table>`;
+        }}
+
+        const queriesEl = document.getElementById('queries-content');
+        if (!an.top_queries || an.top_queries.length === 0) {{
+            queriesEl.innerHTML = '<p class="empty">No data yet.</p>';
+        }} else {{
+            const rows = an.top_queries.map(q =>
+                `<tr><td>${{q.query}}</td><td><span class="badge">${{q.count}}</span></td></tr>`
+            ).join('');
+            queriesEl.innerHTML = `<table><thead><tr><th>Query</th><th>Count</th></tr></thead><tbody>${{rows}}</tbody></table>`;
+        }}
+
+        const recentEl = document.getElementById('recent-content');
+        if (!an.recent || an.recent.length === 0) {{
+            recentEl.innerHTML = '<p class="empty">No activity yet.</p>';
+        }} else {{
+            const rows = an.recent.slice().reverse().map(r => {{
+                const ts = (r.timestamp||'').slice(0,16).replace('T',' ');
+                const tools = (r.tools||[]).map(t => t.name).join(', ') || '—';
+                const dur = r.total_duration_s ? (r.total_duration_s.toFixed(1)+'s') : '';
+                return `<tr>
+                    <td style="color:#999;white-space:nowrap">${{ts}} UTC</td>
+                    <td>${{r.query||''}}</td>
+                    <td><span class="badge">${{tools}}</span></td>
+                    <td style="color:#999">${{dur}}</td>
+                </tr>`;
+            }}).join('');
+            recentEl.innerHTML = `<table><thead><tr><th>Time</th><th>Query</th><th>Tool</th><th>Duration</th></tr></thead><tbody>${{rows}}</tbody></table>`;
+        }}
+    }}
+    load();
+    </script>
+    </body></html>
+    """
 
 
 @app.route("/api/export/tours", methods=["GET"])

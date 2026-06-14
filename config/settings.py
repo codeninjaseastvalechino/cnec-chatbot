@@ -63,6 +63,9 @@ class Settings:
         "mystudio_cookies.json",
     )
 
+    # ── Admin page ───────────────────────────────────────────────────────────
+    ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "cnec-admin")
+
     # ── Gmail IMAP (2FA code extraction) ──────────────────────────────────────
     GMAIL_ADDRESS: str = os.getenv("GMAIL_ADDRESS", "")
     GMAIL_APP_PASSWORD: str = os.getenv("GMAIL_APP_PASSWORD", "")
