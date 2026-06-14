@@ -403,6 +403,15 @@ def index():
                 opacity: 0.6;
             }
 
+            .feature-request-btn {
+                background: #f59e0b;
+                width: 100%;
+            }
+            .feature-request-btn:hover:not(:disabled) {
+                background: #d97706;
+                box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+            }
+
             @media (max-width: 768px) {
                 .container {
                     max-height: 100%;
@@ -455,6 +464,10 @@ def index():
                 <h3>Tours</h3>
                 <button class="quick-btn" onclick="quickSend('How many tours are scheduled today?')">📊 Tour summary</button>
                 <button class="quick-btn" onclick="quickSend('I need to reschedule a tour')">🔄 Reschedule tour</button>
+
+                <div class="sidebar-divider"></div>
+                <h3>Feedback</h3>
+                <button class="quick-btn feature-request-btn" onclick="startFeatureRequest()">💡 Feature Request</button>
             </div>
         </div>
 
@@ -466,6 +479,14 @@ def index():
             const input = document.getElementById('message');
             input.value = text;
             sendMessage();
+        }
+
+        function startFeatureRequest() {
+            if (isProcessing) return;
+            const input = document.getElementById('message');
+            input.value = 'FEATURE REQUEST: ';
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
         }
 
         function parseMarkdownLinks(text) {
@@ -566,6 +587,33 @@ def index():
     """
 
 
+FEATURE_REQUESTS_FILE = Path("logs/feature_requests.jsonl")
+
+
+def _save_feature_request(text: str) -> None:
+    FEATURE_REQUESTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(FEATURE_REQUESTS_FILE, "a") as f:
+        f.write(json.dumps({"ts": datetime.utcnow().isoformat(), "request": text}) + "\n")
+    logger.info("Feature request saved: %s", text)
+
+
+@app.route("/api/feature-requests", methods=["GET"])
+def get_feature_requests():
+    """Return all saved feature requests."""
+    try:
+        if not FEATURE_REQUESTS_FILE.exists():
+            return jsonify({"requests": []})
+        entries = []
+        with open(FEATURE_REQUESTS_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    entries.append(json.loads(line))
+        return jsonify({"requests": entries})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     """Handle chat messages, streaming SSE status updates then final response."""
@@ -576,6 +624,21 @@ def chat():
         return jsonify({"error": "Empty message"}), 400
 
     audit.log_event("user_message", {"message": user_message})
+
+    # Feature request — save to file and return immediately, no Claude call needed
+    if user_message.upper().startswith("FEATURE REQUEST:"):
+        request_text = user_message[len("FEATURE REQUEST:"):].strip()
+        if request_text:
+            _save_feature_request(request_text)
+            return jsonify({
+                "response": "✅ Thanks for the feedback! Your feature request has been saved and will be reviewed.",
+                "statuses": []
+            })
+        else:
+            return jsonify({
+                "response": "Please describe your feature request after 'FEATURE REQUEST:'",
+                "statuses": []
+            })
 
     try:
         statuses = []
