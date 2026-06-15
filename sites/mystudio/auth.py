@@ -24,8 +24,8 @@ logger = get_logger(__name__)
 BASE_URL = settings.MYSTUDIO_API_URL
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Content-Type": "application/json; charset=UTF-8",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "X-Requested-With": "XMLHttpRequest",
     "Referer": "https://cn.mystudio.io/v43/WebPortal/",
     "Origin": "https://cn.mystudio.io",
 }
@@ -164,6 +164,11 @@ def complete_otp_login(otp: str) -> requests.Session:
 
     session = _pending_session
     _pending_session = None
+
+    # The WebPortal sets c_u_id_{user_id}=<email> — our API login doesn't get it
+    # automatically, so we inject it. Required by getFilterDetails.
+    email_cookie = urllib.parse.quote(settings.MYSTUDIO_USERNAME, safe="")
+    session.cookies.set(f"c_u_id_{settings.MYSTUDIO_USER_ID}", email_cookie, domain=".mystudio.io")
 
     _save_cached_cookies(dict(session.cookies))
     logger.info("MyStudio login complete, cookies cached for 30 days")

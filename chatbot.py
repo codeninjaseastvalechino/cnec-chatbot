@@ -37,6 +37,12 @@ from sites.lineleader.schedules import (
 )
 from sites.mystudio.schedules import get_todays_appointments
 from sites.mystudio.auth import MystudioOTPRequired, complete_otp_login
+from sites.mystudio.camps import (
+    get_all_upcoming_camps,
+    get_camp_roster,
+    format_camps_summary,
+    format_camp_roster,
+)
 from format_tours import format_unified_schedule
 from export_tours import create_unified_excel_file
 
@@ -66,6 +72,7 @@ class ChatbotEngine:
         "lookup_student":           "Looking up student in MyStudio...",
         "cancel_student_session":   "Cancelling session in MyStudio...",
         "move_student_session":     "Rescheduling session in MyStudio...",
+        "get_camp_details":         "Fetching camp info from MyStudio...",
     }
 
     def chat(self, user_message: str, status_callback=None, user_name: str = "Unknown") -> str:
@@ -373,6 +380,55 @@ Be concise and friendly. Staff are busy — get to the point."""
                 },
             },
             handler=self._handle_lookup_student,
+        )
+        self._register(
+            name="get_camp_details",
+            description=(
+                "Fetch upcoming camp details from MyStudio. "
+                "Returns camp names, dates, enrollment counts, and optionally the roster of enrolled kids. "
+                "Use when staff ask about camps — e.g. 'what camps are coming up?', "
+                "'how many kids are in the Minecraft camp?', 'who's enrolled in the June 15 camp?', "
+                "'show me the summer camp schedule', 'list all camps this week'. "
+                "Pass camp_name to filter by a specific camp title (fuzzy match). "
+                "Use week_of_date_str when user says 'week of X' or 'that week' — finds all camps in the Mon–Fri week containing that date. "
+                "Use after_date_str for open-ended 'after X' or 'from X' filters. "
+                "Pass include_roster=true only when staff explicitly ask who is enrolled."
+            ),
+            parameters={
+                "week_of_date_str": {
+                    "type": "string",
+                    "description": (
+                        "Use when the user asks about a specific week, e.g. 'week of July 17', "
+                        "'camps that week', 'next week'. Pass the raw date phrase — Python will find "
+                        "the Monday of the week containing that date and return only camps that week. "
+                        "Takes precedence over after_date_str when both are set."
+                    ),
+                },
+                "after_date_str": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Pass the raw date phrase from the user (e.g. 'today', "
+                        "'June 22') to filter camps starting on or after that date. "
+                        "Leave empty to return all upcoming camps."
+                    ),
+                },
+                "camp_name": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Camp title keyword to filter by, e.g. 'Minecraft', 'JR', 'PM CAMP'. "
+                        "Leave empty to return all camps."
+                    ),
+                },
+                "include_roster": {
+                    "type": "boolean",
+                    "description": (
+                        "Set to true only when staff explicitly ask who is enrolled in a specific camp. "
+                        "Triggers an extra API call per matching camp. "
+                        "Requires camp_name to be set so we know which camp's roster to fetch."
+                    ),
+                },
+            },
+            handler=self._handle_get_camp_details,
         )
 
     def _register(self, name: str, description: str, parameters: dict, handler):
@@ -952,3 +1008,86 @@ Be concise and friendly. Staff are busy — get to the point."""
 
         except Exception as e:
             raise RuntimeError(f"Failed to fetch full schedule for {date_str}: {e}")
+
+    def _handle_get_camp_details(self, tool_input: dict) -> str:
+        """Fetch upcoming camps, optionally filtered by name/date, optionally with roster."""
+        from datetime import datetime, timedelta
+
+        after_date = None
+        week_end = None  # set when filtering to a specific week
+
+        week_of_str = (tool_input.get("week_of_date_str") or "").strip()
+        after_date_str = (tool_input.get("after_date_str") or "").strip()
+
+        if week_of_str:
+            # Find Monday of the week containing the given date
+            resolved, err = self._resolve_tool_date(
+                {"date_str": week_of_str}, key="date_str", default="today"
+            )
+            if err:
+                return err
+            monday = resolved - timedelta(days=resolved.weekday())
+            monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+            after_date = monday
+            week_end = monday + timedelta(days=7)
+        elif after_date_str:
+            resolved, err = self._resolve_tool_date(
+                {"date_str": after_date_str}, key="date_str", default="today"
+            )
+            if err:
+                return err
+            after_date = resolved
+
+        camp_name_filter = (tool_input.get("camp_name") or "").strip().lower()
+        include_roster = bool(tool_input.get("include_roster", False))
+
+        try:
+            camps = get_all_upcoming_camps(from_date=after_date)
+            if week_end:
+                camps = [c for c in camps if c.start_dt < week_end]
+        except MystudioOTPRequired:
+            self._awaiting_mystudio_otp = True
+            return (
+                "🔐 **MyStudio verification needed.**\n\n"
+                f"An OTP code was sent to **{settings.MYSTUDIO_USERNAME}**.\n\n"
+                "Please check your email and reply with the **6-digit code** to continue."
+            )
+        except Exception as e:
+            logger.error("get_all_upcoming_camps failed: %s", e)
+            return "Sorry, I couldn't fetch camp data from MyStudio right now."
+
+        if not camps:
+            return "No upcoming camps found in MyStudio."
+
+        # Apply name filter
+        if camp_name_filter:
+            filtered = [c for c in camps if camp_name_filter in c.title.lower()]
+            if not filtered:
+                return (
+                    f"No upcoming camps matching '{tool_input.get('camp_name')}' found.\n\n"
+                    "Available camps this season:\n" + format_camps_summary(camps)
+                )
+        else:
+            filtered = camps
+
+        # Roster mode: only when a specific camp name was given
+        if include_roster and camp_name_filter:
+            if len(filtered) == 1:
+                camp = filtered[0]
+                kids = get_camp_roster(camp.event_id, camp.parent_id)
+                return format_camp_roster(camp, kids)
+            elif len(filtered) <= 4:
+                # Multiple matches — show roster for each
+                parts = []
+                for camp in filtered:
+                    kids = get_camp_roster(camp.event_id, camp.parent_id)
+                    parts.append(format_camp_roster(camp, kids))
+                return "\n\n---\n\n".join(parts)
+            else:
+                return (
+                    f"Found {len(filtered)} camps matching '{tool_input.get('camp_name')}'. "
+                    "Please be more specific (e.g. include the date or time) so I can pull the right roster.\n\n"
+                    + format_camps_summary(filtered)
+                )
+
+        return format_camps_summary(filtered)

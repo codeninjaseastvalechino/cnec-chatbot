@@ -94,7 +94,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | 1 — LineLeader login + GBS/JR GBS tour pull + reschedule | ✅ Complete | Production-ready CLI tool |
 | 2 — MyStudio login + unified schedule + chat/Excel output | ✅ Complete | Direct API + OTP 2FA, 30-day cookie caching |
 | 3 — Student lookup | ✅ Complete | See session notes below |
-| 3b — Camp details | ⬜ Not started | Separate milestone, own plan needed |
+| 3b — Camp details | ✅ Complete | Camp list, enrollment counts, kid names + ages, unique kid dedup, week-of-date resolution |
 | 4 — Move / cancel appointments (single session) | ✅ Complete | Recurring all-future ops have gaps — see Known Issues |
 | 4 — Move / cancel appointments (all-future recurring) | ⚠️ Partial | API returns Success but does not cascade — under investigation |
 | 4 — Book new appointment | ⬜ Not started | Blocked: requires student-session token not yet solved |
@@ -143,6 +143,39 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 - No new Python modules needed — this is purely a frontend/template change to `app.py`
 
 ---
+
+### Session 2026-06-14 — Milestone 3b (camp details)
+
+**Changes made:**
+- ✅ **`sites/mystudio/camps.py`** — new module:
+  - `CampRecord` dataclass — event_id, parent_id, title, start/end datetime, enrolled, capacity, event_show_status, age
+  - `CampKid` dataclass — participant_name, buyer_name, phone, email, status, event_title, age (p_age from API)
+  - `get_live_parent_events()` — dynamic parent group discovery, no hardcoded IDs
+  - `get_camps_under_parent()` — filters null-date templates and camps with no real schedule
+  - `get_all_upcoming_camps()` — two-step discovery, filtered + sorted by start_dt
+  - `get_camp_roster()` — POST getFilterDetails with 36-column DataTables format, returns kid names + ages
+  - `format_camps_summary()` — grouped by week, shows enrollment/capacity/spots left, filters hidden camps
+  - `format_camp_roster()` — per-camp kid list, None-safe
+- ✅ **`chatbot.py`** — `get_camp_details` tool:
+  - `week_of_date_str` param — resolves to Monday of containing week (handles mid-week dates like "July 17")
+  - `after_date_str` param — open-ended "from date" filter
+  - `camp_name` param — fuzzy keyword filter
+  - `include_roster` param — fetches kid names + ages per camp
+- ✅ **`sites/mystudio/auth.py`** — three header fixes required for getFilterDetails:
+  - Removed session-level `Content-Type: application/json` (was overriding form POST encoding)
+  - Added `X-Requested-With: XMLHttpRequest` (PHP backend requires this for AJAX endpoints)
+  - Inject `c_u_id_{user_id}` email cookie after OTP login (WebPortal sets this; API login doesn't)
+- ✅ **`tests/sites/mystudio/test_camps.py`** — 31 unit tests (week_label, time_range, spots_left, filtering, formatting)
+
+**Key discoveries:**
+- `getFilterDetails` requires `filter_options` (with `s`), not `filter_option` — different from all other endpoints
+- `filter_options` needs `child_event_type: "S"` (not `"AP"`) and parent ID in `all_event_id`
+- 36 DataTables columns required (not 13 like class roster) — exact column layout captured from browser DevTools
+- Hidden camps (`event_show_status="N"`) have real dates and appear in raw fetch — must filter in `format_camps_summary`
+- `week_of_date_str` needed because "week of July 17" (Thursday) should return July 13–17, not July 17+
+- `c_u_id_9901` email cookie + `X-Requested-With` were the two missing pieces that caused "User doesn't exist" error on all previous attempts
+
+**auth.py header change safety:** `schedules.py`, `students.py`, and `write.py` all set their own per-request Content-Type — they are unaffected by the session-level change.
 
 ### Session 2026-06-05 — Milestone 3 + 4 (student lookup + write ops)
 
@@ -419,7 +452,10 @@ cnec-chatbot/
 │   └── mystudio/
 │       ├── auth.py                  ← Cookie-based session auth + OTP 2FA
 │       ├── schedules.py             ← Class schedule + student roster fetching
-│       └── appointments.py          ← StudentAppointment data structure
+│       ├── appointments.py          ← StudentAppointment data structure
+│       ├── students.py              ← Student lookup, sessions, attendance
+│       ├── write.py                 ← Cancel / move appointments
+│       └── camps.py                 ← Camp list, roster, formatting (M3b)
 ├── asset/
 │   └── cnec-logo.jpeg               ← Code Ninjas Eastvale Chino logo
 ├── logs/
@@ -434,7 +470,10 @@ cnec-chatbot/
 │   │   ├── lineleader/
 │   │   │   └── test_schedules.py    ← _build_put_payload, _parse_tasks, get_upcoming_gbs_tours, etc.
 │   │   └── mystudio/
-│   │       └── test_schedules.py    ← _parse_student_to_appointment
+│   │       ├── test_schedules.py    ← _parse_student_to_appointment
+│   │       ├── test_students.py     ← student lookup, attendance, parsing
+│   │       ├── test_write.py        ← cancel/move success, flags, errors
+│   │       └── test_camps.py        ← CampRecord helpers, filtering, formatting
 │   ├── test_chatbot_helpers.py      ← _resolve_tool_date
 │   └── test_llm_provider.py         ← multi-tool extraction
 └── browser_state/
@@ -1487,6 +1526,7 @@ def mock_lineleader_api(monkeypatch):
 | **All-future reschedule does not cascade** | `allow_recurring_reschedule: "Y"` + `selected_reschedule_type: "Y"` returns Success but future occurrences are not moved. Single reschedule works. Same root cause as above. |
 | **Book new appointment blocked** | `stripeClassAppointmentRegistration` requires a student-session token from the POS flow — not available from staff auth. Deferred until token source identified. |
 | **"Monday" resolves to nearest Monday from today** | When moving a session that is itself in the future (e.g. "move June 13 to Monday"), "Monday" resolves relative to today, not relative to June 13. Workaround: specify explicit date ("June 15"). Fix: after resolving to_date, if it falls before from_date, roll forward 7 days. |
+| ~~Camp roster blocked~~ | ✅ Fixed (M3b) — root cause was missing `X-Requested-With: XMLHttpRequest` header + session-level `Content-Type: application/json` overriding form POST encoding + missing `c_u_id_9901` email cookie. |
 
 ### 🔄 In Progress / Untested
 | Question | Notes |

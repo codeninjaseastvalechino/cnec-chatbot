@@ -13,6 +13,9 @@ AI-powered scheduling assistant for **Code Ninjas Eastvale Chino**. Staff ask qu
 > *"Who's coming in tomorrow?"*
 > *"Reschedule the 3pm tour to 4:30"*
 > *"Download today's schedule as Excel"*
+> *"What camps are running next week?"*
+> *"Who's enrolled in the Minecraft camp? How old are they?"*
+> *"What camps are running for the week of July 17th?"*
 
 The chatbot figures out which system to query (or both), fetches the data, and presents it in a clean, readable format. You can also download any schedule as an Excel file in one click.
 
@@ -107,6 +110,9 @@ Bot:  📅 Wednesday, June 3, 2026
 - ✅ Multi-turn conversation — ask follow-ups naturally
 - ✅ Accessible from any machine on the same WiFi
 - ✅ Query analytics — tracks what's asked most to improve the UI over time
+- ✅ Summer camp details — list camps by week, enrollment counts, spots left
+- ✅ Camp roster — who's enrolled in each camp, kid names and ages
+- ✅ "Week of July 17th" style queries — resolves any date to the correct Mon–Fri week
 
 ### Authentication
 - **LineLeader:** Logs in automatically, token cached for ~1 hour
@@ -116,8 +122,8 @@ Bot:  📅 Wednesday, June 3, 2026
 - ✅ ~~Student lookup by name~~ — live
 - ✅ ~~Create / cancel appointments~~ (single session) — live
 - ✅ ~~Cloud hosting~~ — live at cnec.up.railway.app
+- ✅ ~~Camp enrollment details~~ — live (Milestone 3b)
 - ⬜ Quick-query shortcut buttons (common queries that skip Claude entirely — faster, free)
-- ⬜ Camp enrollment details (Milestone 3b)
 - ⬜ Cancel / move all-future recurring sessions (API gap under investigation)
 - ⬜ Book new appointment (blocked — requires POS-flow token not yet obtainable)
 - ⬜ Employee schedule (Homebase — Milestone 6)
@@ -132,6 +138,7 @@ Bot:  📅 Wednesday, June 3, 2026
 | 1 | LineLeader login + GBS tours + reschedule (CLI) | ✅ Complete |
 | 2 | MyStudio login + unified schedule + Excel export | ✅ Complete |
 | 3 | Student lookup by name | ✅ Complete |
+| 3b | Camp details — list, roster, kid names + ages | ✅ Complete |
 | 4 | Cancel / move appointments (single session) | ✅ Complete |
 | 5 | Web chat UI + Claude API + function calling | ✅ Complete |
 | 6 | Employee schedule (Homebase) | ⬜ Backlog |

@@ -513,13 +513,14 @@ def index():
                             <div class="help-row"><span class="help-feature">Student lookup</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Look up Veshant Bhatia"</span> · <span class="help-ex" onclick="helpSend(this)">"What sessions does Alex have coming up?"</span></span></div>
                             <div class="help-row"><span class="help-feature">Cancel a session (single)</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Cancel Alex\'s session on June 20"</span></span></div>
                             <div class="help-row"><span class="help-feature">Move a session (single)</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Move Alex\'s June 18 class to June 20 at 3pm"</span></span></div>
+                            <div class="help-row"><span class="help-feature">Summer camp schedule</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"What camps are running next week?"</span> · <span class="help-ex" onclick="helpSend(this)">"Camps for the week of July 17th"</span></span></div>
+                            <div class="help-row"><span class="help-feature">Camp roster &amp; enrollment</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Who\'s enrolled in the Minecraft camp?"</span> · <span class="help-ex" onclick="helpSend(this)">"How many kids in the LEGO camp next week?"</span></span></div>
                             <div class="help-row" style="border-bottom:none;"><span class="help-feature">Excel export</span><span class="help-examples"><span class="help-ex" onclick="helpSend(this)">"Download today\'s schedule as Excel"</span> · <span class="help-ex" onclick="helpSend(this)">"Export Friday\'s tours"</span></span></div>
                         </div>
 
                         <!-- Coming soon -->
                         <div style="margin-bottom:24px;">
                             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;background:#1e3a5f;color:#93c5fd;padding:4px 10px;border-radius:4px;display:inline-block;margin-bottom:12px;">Coming soon</div>
-                            <div class="help-row"><span class="help-feature">Camp enrollment details</span><span class="help-note">API discovery in progress (M3b)</span></div>
                             <div class="help-row" style="border-bottom:none;"><span class="help-feature">Instant quick-query shortcuts</span><span class="help-note">Sidebar buttons will bypass Claude for faster responses</span></div>
                         </div>
 
