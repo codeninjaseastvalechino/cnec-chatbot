@@ -58,7 +58,10 @@ class ChatbotEngine:
         self.bearer_token = None
         self._awaiting_mystudio_otp = False
         self._analytics = QueryAnalytics()
-        self._last_camp_data = None  # Cache for Excel export: {"camps": [...], "rosters": {...}}
+        self._last_camp_data = None    # Cache for Excel export: {"camps": [...], "rosters": {...}}
+        self._last_schedule_fetched = False   # True when a schedule tool ran this turn
+        self._last_any_tool_ran = False       # True when any tool ran this turn
+        self._last_export_label = None        # Human label for what's cached: "full_schedule", "gbs_tours", "camps"
 
         # Tool registry: name → {definition, handler}
         # Add new tools via _register() in _register_tools() only
@@ -92,6 +95,8 @@ class ChatbotEngine:
             self.conversation_history.append({"role": "assistant", "content": result})
             return result
 
+        self._last_schedule_fetched = False
+        self._last_any_tool_ran = False
         logger.info("User query: %s", user_message[:120])
         request_start = time.monotonic()
         _tracker = self._analytics.start_query(user_message, query_type="natural_language", user=user_name)
@@ -460,6 +465,8 @@ Be concise and friendly. Staff are busy — get to the point."""
         """Return tool definitions for the LLM. Auto-populated from registry."""
         return [entry["definition"] for entry in self._tools.values()]
 
+    _SCHEDULE_TOOLS = {"get_full_schedule", "get_gbs_tours", "get_upcoming_gbs_tours"}
+
     def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
         """
         Dispatch a tool call to its registered handler.
@@ -468,6 +475,9 @@ Be concise and friendly. Staff are busy — get to the point."""
         if tool_name not in self._tools:
             logger.warning("Unknown tool requested: %s", tool_name)
             return f"Unknown tool: {tool_name}. Available tools: {list(self._tools.keys())}"
+        self._last_any_tool_ran = True
+        if tool_name in self._SCHEDULE_TOOLS:
+            self._last_schedule_fetched = True
         try:
             return self._tools[tool_name]["handler"](tool_input)
         except Exception as e:
@@ -501,6 +511,11 @@ Be concise and friendly. Staff are busy — get to the point."""
             from sites.lineleader.schedules import get_sessions_for_date
             sessions = get_sessions_for_date(self.bearer_token, date_str)
             enrich_sessions_with_children(self.bearer_token, sessions)
+
+            # Cache for Excel export (GBS only — no MyStudio data)
+            self._last_gbs_sessions = sessions
+            self._last_appointments = []
+            self._last_export_label = "gbs_tours"
 
             if not sessions:
                 return f"No tours scheduled for {resolved.strftime('%A, %B %-d')}."
@@ -543,6 +558,11 @@ Be concise and friendly. Staff are busy — get to the point."""
 
             sessions = get_upcoming_gbs_tours(self.bearer_token, after_date=after_date, limit=limit)
             enrich_sessions_with_children(self.bearer_token, sessions)
+
+            # Cache for Excel export (GBS only — no MyStudio data)
+            self._last_gbs_sessions = sessions
+            self._last_appointments = []
+            self._last_export_label = "gbs_tours"
 
             if not sessions:
                 return f"No GBS tours found {label}."
@@ -998,6 +1018,7 @@ Be concise and friendly. Staff are busy — get to the point."""
             # Cache for Excel export (avoids double API calls)
             self._last_gbs_sessions = gbs_sessions
             self._last_appointments = appointments
+            self._last_export_label = "full_schedule"
 
             formatted = format_unified_schedule(gbs_sessions, appointments, date=resolved)
 

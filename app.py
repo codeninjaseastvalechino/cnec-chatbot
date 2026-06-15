@@ -166,6 +166,41 @@ def index():
                 margin: 4px 0;
             }
 
+            .download-btn {
+                width: 100%;
+                padding: 9px 12px;
+                background: var(--cn-navy-card);
+                color: #6b7a8d;
+                border: 1px solid var(--cn-navy-border);
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 500;
+                text-align: left;
+                line-height: 1.3;
+                text-decoration: none;
+                display: block;
+                box-sizing: border-box;
+                transition: all 0.15s;
+                cursor: not-allowed;
+                pointer-events: none;
+                opacity: 0.5;
+            }
+
+            .download-btn.ready {
+                background: #1a4731;
+                color: #4caf7d;
+                border-color: #2d6a4f;
+                cursor: pointer;
+                pointer-events: auto;
+                opacity: 1;
+            }
+
+            .download-btn.ready:hover {
+                background: #1D6F42;
+                color: white;
+                border-color: #1D6F42;
+            }
+
             @media (max-width: 768px) {
                 .sidebar { display: none; }
             }
@@ -264,23 +299,6 @@ def index():
                 color: var(--cn-gold);
                 text-decoration: underline;
                 cursor: pointer;
-            }
-
-            .excel-btn {
-                display: inline-block;
-                margin-top: 10px;
-                padding: 6px 14px;
-                background: #1D6F42;
-                color: white !important;
-                text-decoration: none !important;
-                border-radius: 5px;
-                font-size: 13px;
-                font-weight: 500;
-                cursor: pointer;
-            }
-
-            .excel-btn:hover {
-                background: #155235;
             }
 
             .bubble table {
@@ -492,7 +510,7 @@ def index():
                     <img src="/asset/cnec-logo.jpeg" alt="Code Ninjas Eastvale Chino Logo" style="height:56px; width:auto; object-fit:contain; border-radius:8px;">
                     <div class="header-text">
                         <h1>CNEC Studio Assistant</h1>
-                        <p>An AI assistant for all your center operations</p>
+                        <p>Your AI operations assistant — just ask</p>
                     </div>
                     <button id="helpBtn" onclick="toggleHelp()" title="What can I ask?" style="margin-left:auto;padding:8px 16px;border-radius:20px;font-size:13px;font-weight:600;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:white;cursor:pointer;flex-shrink:0;">? What can I ask</button>
                 </div>
@@ -551,6 +569,10 @@ def index():
                 <button class="quick-btn" onclick="quickSend('How many students are coming today?')">👥 Student count</button>
 
                 <div class="sidebar-divider"></div>
+                <h3>Export</h3>
+                <a id="sidebarDownloadBtn" class="download-btn" href="#" title="Fetch a schedule first">📊 Download as Excel</a>
+
+                <div class="sidebar-divider"></div>
                 <h3>Feedback</h3>
                 <button class="quick-btn feature-request-btn" onclick="startFeatureRequest()">💡 Feature Request</button>
             </div>
@@ -606,18 +628,26 @@ def index():
             return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
         }
 
-        function addExcelButtonIfSchedule(responseText, bubbleElement, exportType) {
-            // Only show download for schedule/tour responses, not camps
-            if (exportType === 'camps') return;
-            const hasScheduleData = /\d+:\d{2}\s*(AM|PM)/i.test(responseText) ||
-                                    /\[ID:\s*\d+\]/.test(responseText);
-            if (!hasScheduleData) return;
-            const btn = document.createElement('a');
-            btn.href = '/api/export/tours';
-            btn.className = 'excel-btn';
-            btn.textContent = '📥 Download as Excel';
-            bubbleElement.appendChild(document.createElement('br'));
-            bubbleElement.appendChild(btn);
+        function updateSidebarDownload(exportType, exportLabel) {
+            const btn = document.getElementById('sidebarDownloadBtn');
+            if (!btn) return;
+            if (exportType === 'tours') {
+                btn.href = '/api/export/tours';
+                btn.textContent = exportLabel === 'gbs_tours' ? '📊 Download GBS tours' : '📊 Download full schedule';
+                btn.title = '';
+                btn.classList.add('ready');
+            } else if (exportType === 'camps') {
+                btn.href = '/api/export/camps';
+                btn.textContent = '📊 Download camps as Excel';
+                btn.title = '';
+                btn.classList.add('ready');
+            } else if (exportType === 'none') {
+                btn.href = '#';
+                btn.textContent = '📊 Download as Excel';
+                btn.title = 'Fetch a schedule first';
+                btn.classList.remove('ready');
+            }
+            // null = Claude answered from context, no tool ran — leave button as-is
         }
 
         function sendMessage() {
@@ -668,7 +698,7 @@ def index():
                     const assistantBubble = document.createElement('div');
                     assistantBubble.className = 'bubble';
                     assistantBubble.innerHTML = parseMarkdownLinks(data.response);
-                    addExcelButtonIfSchedule(data.response, assistantBubble, data.export_type);
+                    updateSidebarDownload(data.export_type, data.export_label);
                     assistantMsg.appendChild(assistantBubble);
                     chat.appendChild(assistantMsg);
                 }
@@ -762,10 +792,23 @@ def chat():
             chatbot._last_camp_data = None
         response_text = chatbot.chat(user_message, status_callback=lambda msg: statuses.append(msg), user_name=user_name)
         audit.log_event("assistant_response", {"message": response_text, "user": user_name})
-        # Tell the client which export endpoint to use — avoids fragile text detection
+        # Tell the client which export endpoint to use
+        # "tours"/"camps" → schedule ran, enable button
+        # "none"          → non-schedule tool ran, disable button
+        # null            → Claude answered from context, leave button as-is
         camp_data = getattr(chatbot, "_last_camp_data", None)
-        export_type = "camps" if camp_data and camp_data.get("camps") else "tours"
-        return jsonify({"response": response_text, "statuses": statuses, "export_type": export_type})
+        schedule_fetched = getattr(chatbot, "_last_schedule_fetched", False)
+        any_tool_ran = getattr(chatbot, "_last_any_tool_ran", False)
+        export_label = getattr(chatbot, "_last_export_label", None)
+        if camp_data and camp_data.get("camps"):
+            export_type = "camps"
+        elif schedule_fetched:
+            export_type = "tours"
+        elif any_tool_ran:
+            export_type = "none"
+        else:
+            export_type = None
+        return jsonify({"response": response_text, "statuses": statuses, "export_type": export_type, "export_label": export_label})
     except Exception as e:
         logger.error("Chat error: %s", e)
         audit.log_event("error", {"error": str(e), "user": user_name})

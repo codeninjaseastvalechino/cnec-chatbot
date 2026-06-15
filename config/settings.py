@@ -67,8 +67,8 @@ class Settings:
     ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "cnec-admin")
 
     # ── Gmail IMAP (2FA code extraction) ──────────────────────────────────────
-    GMAIL_ADDRESS: str = os.getenv("GMAIL_ADDRESS", "")
-    GMAIL_APP_PASSWORD: str = os.getenv("GMAIL_APP_PASSWORD", "")
+    GMAIL_ADDRESS: str = os.getenv("GMAIL_ADDRESS", "").strip()
+    GMAIL_APP_PASSWORD: str = os.getenv("GMAIL_APP_PASSWORD", "").strip()
     GMAIL_2FA_TIMEOUT_SECONDS: int = int(os.getenv("GMAIL_2FA_TIMEOUT_SECONDS", "120"))
     GMAIL_2FA_POLL_INTERVAL_SECONDS: int = 2
 

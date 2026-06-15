@@ -12,7 +12,15 @@ def _make_engine():
     engine._tools = {}
     engine._awaiting_mystudio_otp = False
     engine.conversation_history = []
+    engine._last_schedule_fetched = False
+    engine._last_any_tool_ran = False
+    engine._last_export_label = None
     return engine
+
+
+def _register_fake_tool(engine, name):
+    """Register a no-op tool on the engine."""
+    engine._tools[name] = {"handler": lambda _: f"result:{name}"}
 
 
 class TestResolveToolDate:
@@ -98,3 +106,127 @@ class TestOtpConversationHistory:
 
         assert any(m["role"] == "user" for m in engine.conversation_history)
         assert any(m["role"] == "assistant" for m in engine.conversation_history)
+
+
+# ---------------------------------------------------------------------------
+# _execute_tool — flag tracking
+# ---------------------------------------------------------------------------
+
+class TestExecuteToolFlags:
+    def test_any_tool_ran_set_for_schedule_tool(self):
+        engine = _make_engine()
+        _register_fake_tool(engine, "get_gbs_tours")
+        engine._execute_tool("get_gbs_tours", {})
+        assert engine._last_any_tool_ran is True
+
+    def test_any_tool_ran_set_for_non_schedule_tool(self):
+        engine = _make_engine()
+        _register_fake_tool(engine, "lookup_student")
+        engine._execute_tool("lookup_student", {})
+        assert engine._last_any_tool_ran is True
+
+    def test_schedule_fetched_set_for_get_gbs_tours(self):
+        engine = _make_engine()
+        _register_fake_tool(engine, "get_gbs_tours")
+        engine._execute_tool("get_gbs_tours", {})
+        assert engine._last_schedule_fetched is True
+
+    def test_schedule_fetched_set_for_get_full_schedule(self):
+        engine = _make_engine()
+        _register_fake_tool(engine, "get_full_schedule")
+        engine._execute_tool("get_full_schedule", {})
+        assert engine._last_schedule_fetched is True
+
+    def test_schedule_fetched_set_for_get_upcoming_gbs_tours(self):
+        engine = _make_engine()
+        _register_fake_tool(engine, "get_upcoming_gbs_tours")
+        engine._execute_tool("get_upcoming_gbs_tours", {})
+        assert engine._last_schedule_fetched is True
+
+    def test_schedule_fetched_not_set_for_lookup_student(self):
+        engine = _make_engine()
+        _register_fake_tool(engine, "lookup_student")
+        engine._execute_tool("lookup_student", {})
+        assert engine._last_schedule_fetched is False
+
+    def test_schedule_fetched_not_set_for_cancel_session(self):
+        engine = _make_engine()
+        _register_fake_tool(engine, "cancel_student_session")
+        engine._execute_tool("cancel_student_session", {})
+        assert engine._last_schedule_fetched is False
+
+    def test_unknown_tool_does_not_set_flags(self):
+        engine = _make_engine()
+        engine._execute_tool("nonexistent_tool", {})
+        assert engine._last_any_tool_ran is False
+        assert engine._last_schedule_fetched is False
+
+    def test_flags_reset_between_calls(self):
+        engine = _make_engine()
+        _register_fake_tool(engine, "get_gbs_tours")
+        _register_fake_tool(engine, "lookup_student")
+
+        engine._execute_tool("get_gbs_tours", {})
+        assert engine._last_schedule_fetched is True
+
+        # Simulate chat() reset at start of next turn
+        engine._last_schedule_fetched = False
+        engine._last_any_tool_ran = False
+
+        engine._execute_tool("lookup_student", {})
+        assert engine._last_schedule_fetched is False
+        assert engine._last_any_tool_ran is True
+
+
+# ---------------------------------------------------------------------------
+# Export label — set correctly by each handler cache block
+# ---------------------------------------------------------------------------
+
+class TestExportLabel:
+    def test_initial_export_label_is_none(self):
+        engine = _make_engine()
+        assert engine._last_export_label is None
+
+    def test_gbs_tours_handler_sets_label(self):
+        """_handle_get_gbs_tours must set _last_export_label = 'gbs_tours'."""
+        from datetime import datetime
+        engine = _make_engine()
+
+        fake_session = MagicMock()
+        fake_session.child_display = ["Journei (4y)"]
+        fake_session.item_id = "123"
+        fake_session.time_display.return_value = "3:00 PM"
+        fake_session.date_display.return_value = "Monday, June 15"
+        fake_session.student_name = "Wittie Hughes"
+        fake_session.tour_type = "GBS"
+        fake_session.assignee_name = "Venay"
+
+        resolved_dt = datetime(2026, 6, 15, 0, 0)
+        with patch.object(engine, "_resolve_tool_date", return_value=(resolved_dt, None)), \
+             patch("sites.lineleader.schedules.get_sessions_for_date", return_value=[fake_session]), \
+             patch("chatbot.enrich_sessions_with_children"):
+            engine._handle_get_gbs_tours({"date_str": "today"})
+
+        assert engine._last_export_label == "gbs_tours"
+        assert engine._last_appointments == []
+        assert engine._last_gbs_sessions == [fake_session]
+
+    def test_upcoming_gbs_tours_handler_sets_label(self):
+        """_handle_get_upcoming_gbs_tours must set _last_export_label = 'gbs_tours'."""
+        fake_session = MagicMock()
+        fake_session.child_display = []
+        fake_session.item_id = "456"
+        fake_session.time_display.return_value = "4:00 PM"
+        fake_session.date_display.return_value = "Tuesday, June 16"
+        fake_session.student_name = "Jane Doe"
+        fake_session.tour_type = "JR GBS"
+        fake_session.assignee_name = "Venay"
+
+        with patch("chatbot.get_bearer_token", return_value="tok"), \
+             patch("sites.lineleader.schedules.get_upcoming_gbs_tours", return_value=[fake_session]), \
+             patch("chatbot.enrich_sessions_with_children"):
+            engine = _make_engine()
+            engine._handle_get_upcoming_gbs_tours({})
+
+        assert engine._last_export_label == "gbs_tours"
+        assert engine._last_appointments == []

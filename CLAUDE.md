@@ -6,9 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Is
 
-An AI-powered automation agent for **Code Ninjas Eastvale Chino** that accepts
-natural language instructions and executes scheduling, data retrieval, and
-administrative tasks across three platforms.
+An **AI Operations Assistant** for **Code Ninjas Eastvale Chino** — an AI agent
+that accepts natural language instructions and executes scheduling, data retrieval,
+and administrative tasks across three platforms. Not a chatbot, not scripted
+automation: Claude reasons about intent, picks the right tool, and acts — with
+staff confirmation before any write operation.
 
 **Long-term vision:** Package and sell to other Code Ninjas centers as a
 multi-tenant SaaS product. Keep all code config-driven — no hardcoded
