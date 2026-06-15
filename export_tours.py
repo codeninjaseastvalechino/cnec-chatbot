@@ -11,7 +11,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from datetime import datetime
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union, Dict, Optional, Any
 import asyncio
 
 
@@ -116,6 +116,156 @@ async def create_excel_file(sessions, filename=None):
     filepath = export_dir / filename
     wb.save(filepath)
 
+    return str(filepath)
+
+
+def create_camps_excel_file(camps, rosters=None, filename=None):
+    """
+    Create an Excel file for camp data.
+
+    If rosters contains kids for a camp, writes a per-kid roster sheet.
+    Falls back to a summary sheet (one row per camp) when no roster data.
+
+    Args:
+        camps: List of CampRecord objects
+        rosters: Dict of event_id -> List[CampKid] (or None / empty)
+        filename: Optional custom filename
+
+    Returns:
+        Path to the created Excel file
+    """
+    if not camps:
+        raise ValueError("No camp data to export")
+
+    rosters = rosters or {}
+
+    wb = Workbook()
+
+    header_fill = PatternFill(start_color="162044", end_color="162044", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    subheader_fill = PatternFill(start_color="1a2a4a", end_color="1a2a4a", fill_type="solid")
+    subheader_font = Font(bold=True, color="eabb5c", size=10)
+    border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin"),
+    )
+
+    # Determine whether we have any roster data
+    has_roster = any(rosters.get(c.event_id) is not None for c in camps)
+
+    if has_roster:
+        # Roster sheet: one row per kid, grouped by camp
+        ws = wb.active
+        ws.title = "Camp Roster"
+
+        ws.column_dimensions["A"].width = 30   # Camp
+        ws.column_dimensions["B"].width = 14   # Date
+        ws.column_dimensions["C"].width = 20   # Time
+        ws.column_dimensions["D"].width = 22   # Kid Name
+        ws.column_dimensions["E"].width = 8    # Age
+        ws.column_dimensions["F"].width = 22   # Parent
+        ws.column_dimensions["G"].width = 15   # Phone
+        ws.column_dimensions["H"].width = 12   # Status
+
+        headers = ["Camp", "Date", "Time", "Kid Name", "Age", "Parent", "Phone", "Status"]
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+        ws.row_dimensions[1].height = 22
+
+        row = 2
+        for camp in camps:
+            kids = rosters.get(camp.event_id)
+            if kids is None:
+                # No roster available — write a single placeholder row
+                ws.cell(row=row, column=1, value=camp.title).border = border
+                ws.cell(row=row, column=2, value=camp.start_dt.strftime("%b %-d")).border = border
+                ws.cell(row=row, column=3, value=camp.time_range()).border = border
+                ws.cell(row=row, column=4, value="(roster unavailable)").border = border
+                for col in range(5, 9):
+                    ws.cell(row=row, column=col).border = border
+                row += 1
+                continue
+
+            if not kids:
+                ws.cell(row=row, column=1, value=camp.title).border = border
+                ws.cell(row=row, column=2, value=camp.start_dt.strftime("%b %-d")).border = border
+                ws.cell(row=row, column=3, value=camp.time_range()).border = border
+                ws.cell(row=row, column=4, value="(no enrollments)").border = border
+                for col in range(5, 9):
+                    ws.cell(row=row, column=col).border = border
+                row += 1
+                continue
+
+            for kid in kids:
+                ws.cell(row=row, column=1, value=camp.title).border = border
+                ws.cell(row=row, column=2, value=camp.start_dt.strftime("%b %-d")).border = border
+                ws.cell(row=row, column=3, value=camp.time_range()).border = border
+                ws.cell(row=row, column=4, value=kid.participant_name).border = border
+                ws.cell(row=row, column=5, value=kid.age or "").border = border
+                ws.cell(row=row, column=5).alignment = Alignment(horizontal="center")
+                ws.cell(row=row, column=6, value=kid.buyer_name).border = border
+                ws.cell(row=row, column=7, value=kid.phone).border = border
+                ws.cell(row=row, column=8, value=kid.status).border = border
+                row += 1
+
+    else:
+        # Summary sheet: one row per camp
+        ws = wb.active
+        ws.title = "Camps"
+
+        ws.column_dimensions["A"].width = 40   # Camp name
+        ws.column_dimensions["B"].width = 14   # Date
+        ws.column_dimensions["C"].width = 20   # Time
+        ws.column_dimensions["D"].width = 12   # Enrolled
+        ws.column_dimensions["E"].width = 12   # Capacity
+        ws.column_dimensions["F"].width = 12   # Spots Left
+
+        headers = ["Camp", "Date", "Time", "Enrolled", "Capacity", "Spots Left"]
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+        ws.row_dimensions[1].height = 22
+
+        for row_num, camp in enumerate(camps, 2):
+            spots = camp.spots_left()
+            ws.cell(row=row_num, column=1, value=camp.title).border = border
+            ws.cell(row=row_num, column=2, value=camp.start_dt.strftime("%b %-d, %Y")).border = border
+            ws.cell(row=row_num, column=3, value=camp.time_range()).border = border
+            ws.cell(row=row_num, column=4, value=camp.enrolled).border = border
+            ws.cell(row=row_num, column=4).alignment = Alignment(horizontal="center")
+            ws.cell(row=row_num, column=5, value=camp.capacity if camp.capacity else "").border = border
+            ws.cell(row=row_num, column=5).alignment = Alignment(horizontal="center")
+            ws.cell(row=row_num, column=6, value=spots if spots is not None else "").border = border
+            ws.cell(row=row_num, column=6).alignment = Alignment(horizontal="center")
+
+    # Summary row at bottom
+    last_row = ws.max_row + 2
+    ws.cell(row=last_row, column=1, value=f"Total camps: {len(camps)}").font = Font(bold=True)
+    if has_roster:
+        total_kids = sum(
+            len([k for k in (rosters.get(c.event_id) or []) if k.status.lower() not in ("cancelled",)])
+            for c in camps
+        )
+        ws.cell(row=last_row + 1, column=1, value=f"Total active enrollments: {total_kids}").font = Font(bold=True)
+
+    if not filename:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        filename = f"camps_{date_str}.xlsx"
+
+    export_dir = Path("exports")
+    export_dir.mkdir(exist_ok=True)
+
+    filepath = export_dir / filename
+    wb.save(filepath)
     return str(filepath)
 
 

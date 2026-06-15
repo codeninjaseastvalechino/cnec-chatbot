@@ -607,12 +607,14 @@ def index():
         }
 
         function addExcelButtonIfSchedule(responseText, bubbleElement) {
-            // Match time patterns (e.g. "3:00 PM") or tour IDs as strong signals actual data was returned
+            // Camp responses: contain "CAMP:" (from MyStudio camp titles in caps)
+            const isCampResponse = /\bCAMP[:\s]/i.test(responseText) && /enrolled/i.test(responseText);
+            // Schedule responses: contain time patterns or tour IDs
             const hasScheduleData = /\d+:\d{2}\s*(AM|PM)/i.test(responseText) ||
                                     /\[ID:\s*\d+\]/.test(responseText);
-            if (!hasScheduleData) return;
+            if (!hasScheduleData && !isCampResponse) return;
             const btn = document.createElement('a');
-            btn.href = '/api/export/tours';
+            btn.href = isCampResponse ? '/api/export/camps' : '/api/export/tours';
             btn.className = 'excel-btn';
             btn.textContent = '📥 Download as Excel';
             bubbleElement.appendChild(document.createElement('br'));
@@ -999,6 +1001,47 @@ def export_tours():
         )
     except Exception as e:
         audit.log_event("error", {"error": f"Export failed: {str(e)}"})
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/export/camps", methods=["GET"])
+def export_camps():
+    """Export the last fetched camp data to Excel."""
+    try:
+        from export_tours import create_camps_excel_file
+
+        if os.getenv("TEST_MODE", "").lower() == "true":
+            # Mock data for test mode
+            from sites.mystudio.camps import CampRecord, CampKid
+            from datetime import datetime as _dt
+            mock_camp = CampRecord(
+                event_id="999", parent_id="100", parent_title="2026 Summer Camps",
+                title="AM CAMP: Test", enrolled=3, capacity=10,
+                start_dt=_dt(2026, 7, 7, 8, 30), end_dt=_dt(2026, 7, 7, 11, 30),
+                event_show_status="Y",
+            )
+            mock_kids = [
+                CampKid("Alice Smith", "Bob Smith", "555-0001", "bob@test.com", "Active", mock_camp.title, "9"),
+                CampKid("Charlie Lee", "David Lee", "555-0002", "dave@test.com", "Active", mock_camp.title, "10"),
+            ]
+            camps = [mock_camp]
+            rosters = {mock_camp.event_id: mock_kids}
+        else:
+            camp_data = getattr(chatbot, "_last_camp_data", None)
+            if not camp_data or not camp_data.get("camps"):
+                return jsonify({"error": "No camp data found. Ask about camps first, then download."}), 400
+            camps = camp_data["camps"]
+            rosters = camp_data.get("rosters", {})
+
+        filepath = create_camps_excel_file(camps, rosters)
+        return send_file(
+            filepath,
+            as_attachment=True,
+            download_name=Path(filepath).name,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    except Exception as e:
+        audit.log_event("error", {"error": f"Camp export failed: {str(e)}"})
         return jsonify({"error": str(e)}), 500
 
 
