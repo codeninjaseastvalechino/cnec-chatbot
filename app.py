@@ -607,15 +607,13 @@ def index():
         }
 
         function addExcelButtonIfSchedule(responseText, bubbleElement, exportType) {
-            // exportType comes from the server ("camps" or "tours") — authoritative
-            const isCamp = exportType === 'camps';
-            // Schedule responses: contain time patterns or tour IDs
+            // Only show download for schedule/tour responses, not camps
+            if (exportType === 'camps') return;
             const hasScheduleData = /\d+:\d{2}\s*(AM|PM)/i.test(responseText) ||
-                                    /\[ID:\s*\d+\]/.test(responseText) ||
-                                    isCamp;
+                                    /\[ID:\s*\d+\]/.test(responseText);
             if (!hasScheduleData) return;
             const btn = document.createElement('a');
-            btn.href = isCamp ? '/api/export/camps' : '/api/export/tours';
+            btn.href = '/api/export/tours';
             btn.className = 'excel-btn';
             btn.textContent = '📥 Download as Excel';
             bubbleElement.appendChild(document.createElement('br'));
