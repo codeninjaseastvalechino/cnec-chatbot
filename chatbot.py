@@ -628,9 +628,9 @@ Be concise and friendly. Staff are busy — get to the point."""
 
         try:
             upcoming = get_student_upcoming_appointments(student.student_id, student.participant_id, days_ahead=60)
-        except MystudioOTPRequired:
+        except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
-            return self._otp_prompt()
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
 
         session_match = next(
             (a for a in upcoming if a.start_time.strftime("%Y-%m-%d") == target_date_str),
@@ -660,9 +660,9 @@ Be concise and friendly. Staff are busy — get to the point."""
                 selected_date=target_date_str,
                 cancel_all_future=cancel_all_future,
             )
-        except MystudioOTPRequired:
+        except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
-            return self._otp_prompt()
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
 
         if success:
             return f"Cancelled: {student.name} — {session_match.appointment_type} on {resolved.strftime('%A, %B %-d')}. {msg}"
@@ -706,9 +706,9 @@ Be concise and friendly. Staff are busy — get to the point."""
 
         try:
             upcoming = get_student_upcoming_appointments(student.student_id, student.participant_id, days_ahead=60)
-        except MystudioOTPRequired:
+        except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
-            return self._otp_prompt()
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
 
         session_match = next(
             (a for a in upcoming if a.start_time.strftime("%Y-%m-%d") == from_date),
@@ -720,9 +720,9 @@ Be concise and friendly. Staff are busy — get to the point."""
         # Find target slot — match by class title + time on target date
         try:
             available = get_available_slots(to_date)
-        except MystudioOTPRequired:
+        except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
-            return self._otp_prompt()
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
 
         target_time_api = resolved_to.strftime("%I:%M %p").lstrip("0")
         target_slot = next(
@@ -767,9 +767,9 @@ Be concise and friendly. Staff are busy — get to the point."""
                 new_program_date=to_date,
                 move_all_future=move_all_future,
             )
-        except MystudioOTPRequired:
+        except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
-            return self._otp_prompt()
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
 
         if success:
             return (
@@ -795,9 +795,9 @@ Be concise and friendly. Staff are busy — get to the point."""
 
         try:
             students = find_student_by_name(student_name)
-        except MystudioOTPRequired:
+        except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
-            return None, self._otp_prompt()
+            return None, self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
 
         if not students:
             return None, (
@@ -840,11 +840,17 @@ Be concise and friendly. Staff are busy — get to the point."""
         # No active memberships found — fall back to first result
         return students[0], None
 
-    def _otp_prompt(self) -> str:
+    def _otp_prompt(self, gmail_error: str = None) -> str:
+        if gmail_error:
+            prefix = "⚠️ Couldn't auto-fetch the OTP from Gmail.\n\n"
+        else:
+            prefix = ""
         return (
             "🔐 **MyStudio verification needed.**\n\n"
-            f"An OTP code was sent to **{settings.MYSTUDIO_USERNAME}**.\n\n"
-            "Please check your email and reply with the **6-digit code** to continue."
+            + prefix
+            + f"Please check **{settings.GMAIL_ADDRESS}** for an email from MyStudio "
+            "and reply here with the **6-digit code**.\n\n"
+            "_(Reply with the code, or anything else to cancel and file a request.)_"
         )
 
     def _handle_lookup_student(self, tool_input: dict) -> str:
@@ -920,13 +926,9 @@ Be concise and friendly. Staff are busy — get to the point."""
                 student.student_id, student.participant_id, days_ahead=30
             )
 
-        except MystudioOTPRequired:
+        except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
-            return (
-                "🔐 **MyStudio verification needed.**\n\n"
-                f"An OTP code was sent to **{settings.MYSTUDIO_USERNAME}**.\n\n"
-                "Please check your email and reply with the **6-digit code** to continue."
-            )
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
 
         lines = [
             f"Student: {student.name}",
@@ -952,9 +954,10 @@ Be concise and friendly. Staff are busy — get to the point."""
         """Handle OTP code submitted via chat."""
         otp = user_message.strip()
         if not (otp.isdigit() and len(otp) == 6):
+            self._awaiting_mystudio_otp = False
             return (
-                "That doesn't look like a 6-digit code. "
-                f"Please check {settings.MYSTUDIO_USERNAME} for the OTP email and enter the 6-digit code."
+                "❌ MyStudio login cancelled. "
+                "Please file a request or try again by asking for the schedule."
             )
         try:
             complete_otp_login(otp)
@@ -985,13 +988,9 @@ Be concise and friendly. Staff are busy — get to the point."""
             try:
                 from sites.mystudio.schedules import get_appointments_for_date
                 appointments = get_appointments_for_date(date_str)
-            except MystudioOTPRequired:
+            except MystudioOTPRequired as _otp_exc:
                 self._awaiting_mystudio_otp = True
-                return (
-                    "🔐 **MyStudio verification needed.**\n\n"
-                    f"An OTP code was sent to **{settings.MYSTUDIO_USERNAME}**.\n\n"
-                    "Please check your email and reply with the **6-digit code** to continue."
-                )
+                return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
             except Exception as e:
                 logger.warning("Failed to fetch MyStudio appointments for %s: %s", date_str, e)
                 appointments = []
@@ -1046,13 +1045,9 @@ Be concise and friendly. Staff are busy — get to the point."""
             camps = get_all_upcoming_camps(from_date=after_date)
             if week_end:
                 camps = [c for c in camps if c.start_dt < week_end]
-        except MystudioOTPRequired:
+        except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
-            return (
-                "🔐 **MyStudio verification needed.**\n\n"
-                f"An OTP code was sent to **{settings.MYSTUDIO_USERNAME}**.\n\n"
-                "Please check your email and reply with the **6-digit code** to continue."
-            )
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
         except Exception as e:
             logger.error("get_all_upcoming_camps failed: %s", e)
             return "Sorry, I couldn't fetch camp data from MyStudio right now."

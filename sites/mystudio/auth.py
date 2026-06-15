@@ -37,8 +37,14 @@ def _encode(value: str) -> str:
 
 
 class MystudioOTPRequired(Exception):
-    """Raised when MyStudio needs OTP and can't prompt interactively."""
-    pass
+    """Raised when MyStudio needs OTP and can't prompt interactively.
+
+    gmail_error: set to the error string if Gmail connection failed;
+                 None if Gmail was not configured or timed out normally.
+    """
+    def __init__(self, message: str = "", gmail_error: Optional[str] = None):
+        super().__init__(message)
+        self.gmail_error = gmail_error
 
 
 # Holds the partial session while waiting for user to enter OTP
@@ -92,11 +98,11 @@ def _start_login() -> requests.Session:
     logger.info("OTP email sent to %s", settings.MYSTUDIO_USERNAME)
     _pending_session = session
 
-    code = _try_auto_otp(inbox_uid_before_otp)
+    code, gmail_error = _try_auto_otp(inbox_uid_before_otp)
     if code:
         return complete_otp_login(code)
 
-    raise MystudioOTPRequired(f"OTP sent to {settings.MYSTUDIO_USERNAME}")
+    raise MystudioOTPRequired(f"OTP sent to {settings.MYSTUDIO_USERNAME}", gmail_error=gmail_error)
 
 
 def _get_inbox_uid_snapshot() -> int:
@@ -112,11 +118,16 @@ def _get_inbox_uid_snapshot() -> int:
         return 0
 
 
-def _try_auto_otp(after_uid: int = 0) -> Optional[str]:
-    """Try to auto-fetch the MyStudio OTP from Gmail. Returns code or None."""
+def _try_auto_otp(after_uid: int = 0) -> "tuple":
+    """Try to auto-fetch the MyStudio OTP from Gmail.
+
+    Returns (code, gmail_error):
+      code        — the 6-digit string if found, else None
+      gmail_error — error string if Gmail connection failed, else None
+    """
     if not settings.GMAIL_ADDRESS or not settings.GMAIL_APP_PASSWORD:
         logger.debug("Gmail credentials not configured — skipping auto-OTP")
-        return None
+        return None, None
 
     logger.info("Auto-OTP: polling Gmail for MyStudio code (after UID %d)...", after_uid)
     try:
@@ -131,10 +142,10 @@ def _try_auto_otp(after_uid: int = 0) -> Optional[str]:
             logger.info("Auto-OTP extracted successfully")
         else:
             logger.warning("Auto-OTP timed out — falling back to manual entry")
-        return code
+        return code, None
     except Exception as e:
         logger.warning("Auto-OTP failed (%s) — falling back to manual entry", e)
-        return None
+        return None, str(e)
 
 
 def complete_otp_login(otp: str) -> requests.Session:
