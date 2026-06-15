@@ -606,15 +606,16 @@ def index():
             return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
         }
 
-        function addExcelButtonIfSchedule(responseText, bubbleElement) {
-            // Camp responses: contain "CAMP:" (from MyStudio camp titles in caps)
-            const isCampResponse = /\bCAMP[:\s]/i.test(responseText) && /enrolled/i.test(responseText);
+        function addExcelButtonIfSchedule(responseText, bubbleElement, exportType) {
+            // exportType comes from the server ("camps" or "tours") — authoritative
+            const isCamp = exportType === 'camps';
             // Schedule responses: contain time patterns or tour IDs
             const hasScheduleData = /\d+:\d{2}\s*(AM|PM)/i.test(responseText) ||
-                                    /\[ID:\s*\d+\]/.test(responseText);
-            if (!hasScheduleData && !isCampResponse) return;
+                                    /\[ID:\s*\d+\]/.test(responseText) ||
+                                    isCamp;
+            if (!hasScheduleData) return;
             const btn = document.createElement('a');
-            btn.href = isCampResponse ? '/api/export/camps' : '/api/export/tours';
+            btn.href = isCamp ? '/api/export/camps' : '/api/export/tours';
             btn.className = 'excel-btn';
             btn.textContent = '📥 Download as Excel';
             bubbleElement.appendChild(document.createElement('br'));
@@ -669,7 +670,7 @@ def index():
                     const assistantBubble = document.createElement('div');
                     assistantBubble.className = 'bubble';
                     assistantBubble.innerHTML = parseMarkdownLinks(data.response);
-                    addExcelButtonIfSchedule(data.response, assistantBubble);
+                    addExcelButtonIfSchedule(data.response, assistantBubble, data.export_type);
                     assistantMsg.appendChild(assistantBubble);
                     chat.appendChild(assistantMsg);
                 }
@@ -758,9 +759,15 @@ def chat():
 
     try:
         statuses = []
+        # Clear camp cache before each call so stale data doesn't bleed into new responses
+        if not os.getenv("TEST_MODE", ""):
+            chatbot._last_camp_data = None
         response_text = chatbot.chat(user_message, status_callback=lambda msg: statuses.append(msg), user_name=user_name)
         audit.log_event("assistant_response", {"message": response_text, "user": user_name})
-        return jsonify({"response": response_text, "statuses": statuses})
+        # Tell the client which export endpoint to use — avoids fragile text detection
+        camp_data = getattr(chatbot, "_last_camp_data", None)
+        export_type = "camps" if camp_data and camp_data.get("camps") else "tours"
+        return jsonify({"response": response_text, "statuses": statuses, "export_type": export_type})
     except Exception as e:
         logger.error("Chat error: %s", e)
         audit.log_event("error", {"error": str(e), "user": user_name})
