@@ -1035,10 +1035,19 @@ def export_camps():
             rosters = {mock_camp.event_id: mock_kids}
         else:
             camp_data = getattr(chatbot, "_last_camp_data", None)
-            if not camp_data or not camp_data.get("camps"):
+            if not camp_data or not camp_data.get("all_camps"):
                 return jsonify({"error": "No camp data found. Ask about camps first, then download."}), 400
-            camps = camp_data["camps"]
-            rosters = camp_data.get("rosters", {})
+            # Use the full unfiltered camp list so the Excel always contains every camp
+            camps = camp_data["all_camps"]
+            rosters = dict(camp_data.get("rosters", {}))
+            # Fetch rosters for any camp that doesn't have one yet
+            from sites.mystudio.camps import get_camp_roster as _get_roster
+            for camp in camps:
+                if camp.event_id not in rosters:
+                    try:
+                        rosters[camp.event_id] = _get_roster(camp.event_id, camp.parent_id)
+                    except Exception:
+                        rosters[camp.event_id] = None
 
         filepath = create_camps_excel_file(camps, rosters)
         return send_file(

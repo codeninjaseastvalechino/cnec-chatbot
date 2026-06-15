@@ -1060,6 +1060,9 @@ Be concise and friendly. Staff are busy — get to the point."""
         if not camps:
             return "No upcoming camps found in MyStudio."
 
+        # Always cache the full unfiltered list so Excel export gets everything
+        self._last_camp_data = {"all_camps": camps, "camps": camps, "rosters": {}}
+
         # Apply name filter
         if camp_name_filter:
             filtered = [c for c in camps if camp_name_filter in c.title.lower()]
@@ -1076,25 +1079,20 @@ Be concise and friendly. Staff are busy — get to the point."""
             if len(filtered) == 1:
                 camp = filtered[0]
                 kids = get_camp_roster(camp.event_id, camp.parent_id)
-                self._last_camp_data = {"camps": [camp], "rosters": {camp.event_id: kids}}
+                self._last_camp_data["rosters"][camp.event_id] = kids
                 return format_camp_roster(camp, kids)
             elif len(filtered) <= 4:
-                # Multiple matches — show roster for each
                 parts = []
-                rosters = {}
                 for camp in filtered:
                     kids = get_camp_roster(camp.event_id, camp.parent_id)
-                    rosters[camp.event_id] = kids
+                    self._last_camp_data["rosters"][camp.event_id] = kids
                     parts.append(format_camp_roster(camp, kids))
-                self._last_camp_data = {"camps": filtered, "rosters": rosters}
                 return "\n\n---\n\n".join(parts)
             else:
-                self._last_camp_data = {"camps": filtered, "rosters": {}}
                 return (
                     f"Found {len(filtered)} camps matching '{tool_input.get('camp_name')}'. "
                     "Please be more specific (e.g. include the date or time) so I can pull the right roster.\n\n"
                     + format_camps_summary(filtered)
                 )
 
-        self._last_camp_data = {"camps": filtered, "rosters": {}}
         return format_camps_summary(filtered)
