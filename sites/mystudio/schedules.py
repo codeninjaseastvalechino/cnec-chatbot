@@ -92,7 +92,16 @@ def get_appointments_for_date(date_str: str) -> List[StudentAppointment]:
     _initialize_session(session)
 
     # Step 1: Get class schedule (time slots)
-    schedule = _get_class_schedule(session, date_str)
+    # If the cached session expired (401), re-authenticate once and retry.
+    # Without this, the 401 bubbles up as MystudioOTPRequired before auto-OTP
+    # has had a chance to run — the user would be asked for a code that was never sent.
+    try:
+        schedule = _get_class_schedule(session, date_str)
+    except MystudioOTPRequired:
+        logger.info("Session expired mid-fetch — re-authenticating and retrying")
+        session = get_session()  # clears cache → calls _start_login() → auto-OTP or raises (email sent this time)
+        _initialize_session(session)
+        schedule = _get_class_schedule(session, date_str)
     if not schedule:
         logger.info("No classes scheduled for %s", date_str)
         return []

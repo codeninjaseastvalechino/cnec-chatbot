@@ -47,6 +47,14 @@ else:
         print("   Check your .env file and LLM_PROVIDER setting.")
         raise
 
+    # Proactively verify MyStudio session on startup so the first request of the day
+    # doesn't hit an unexpected 401. Auto-OTP runs silently if cookies have expired.
+    try:
+        from sites.mystudio.auth import verify_and_refresh_session
+        verify_and_refresh_session()
+    except Exception as e:
+        logger.warning("Startup MyStudio session check failed (non-fatal): %s", e)
+
 # Serve logo from asset folder
 @app.route("/asset/<path:filename>")
 def serve_asset(filename):
@@ -725,6 +733,12 @@ def index():
             if (e.key === 'Enter' && !isProcessing) sendMessage();
         });
         document.getElementById('message').focus();
+
+        // Warn before closing/refreshing so staff don't lose their session accidentally
+        window.addEventListener('beforeunload', e => {
+            e.preventDefault();
+            e.returnValue = '';
+        });
         </script>
     </body>
     </html>

@@ -186,6 +186,51 @@ def complete_otp_login(otp: str) -> requests.Session:
     return session
 
 
+def verify_and_refresh_session() -> bool:
+    """
+    Proactively check whether cached MyStudio cookies are still valid.
+    If the server-side session has expired (as happens daily), triggers
+    auto-OTP re-authentication in the background before any user request hits a 401.
+
+    Returns True if session is valid or was refreshed successfully.
+    Returns False if no cache exists or re-auth failed (non-fatal — first real
+    request will retry and prompt if needed).
+    """
+    cached = _load_cached_cookies()
+    if not cached:
+        logger.info("Proactive session check: no cache — will authenticate on first request")
+        return False
+
+    try:
+        session = _build_session_from_cookies(cached)
+        resp = session.get(
+            f"{BASE_URL}/verifySession",
+            params={"company_id": settings.MYSTUDIO_COMPANY_ID},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+                if data.get("status") == "Success":
+                    logger.info("Proactive session check: cookies still valid")
+                    return True
+            except Exception:
+                pass
+
+        logger.info("Proactive session check: session expired — re-authenticating")
+        clear_cached_cookies()
+        _start_login()  # auto-OTP if Gmail configured; raises MystudioOTPRequired if it times out
+        logger.info("Proactive session check: re-authentication successful")
+        return True
+
+    except MystudioOTPRequired:
+        logger.warning("Proactive session check: auto-OTP timed out — manual OTP required on next MyStudio request")
+        return False
+    except Exception as e:
+        logger.warning("Proactive session check failed: %s", e)
+        return False
+
+
 def clear_cached_cookies() -> None:
     """Delete the cookie cache file — forces fresh login on next get_session() call."""
     cache_file = settings.MYSTUDIO_COOKIE_FILE
