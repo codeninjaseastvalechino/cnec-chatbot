@@ -13,6 +13,7 @@ Handles:
 import json
 import os
 import asyncio
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,10 @@ class ChatbotEngine:
         self._last_any_tool_ran = False       # True when any tool ran this turn
         self._last_export_label = None        # Human label for what's cached: "full_schedule", "gbs_tours", "camps"
 
+        # Serialize all chat() calls — Flask runs with threaded=True so concurrent
+        # requests share this singleton and race on conversation_history.
+        self._chat_lock = threading.Lock()
+
         # Tool registry: name → {definition, handler}
         # Add new tools via _register() in _register_tools() only
         self._tools = {}
@@ -90,58 +95,92 @@ class ChatbotEngine:
                 return True
         return False
 
+    @staticmethod
+    def _is_tool_results_message(msg) -> bool:
+        """Return True if msg is a user message whose content is a list of tool_result blocks."""
+        if msg.get("role") != "user":
+            return False
+        content = msg.get("content", [])
+        return (
+            isinstance(content, list)
+            and bool(content)
+            and isinstance(content[0], dict)
+            and content[0].get("type") == "tool_result"
+        )
+
     def _sanitize_history(self) -> None:
         """
         Remove any corrupted tail from conversation_history.
 
-        An orphaned tool_use occurs when an assistant message with tool_use blocks
-        is not immediately followed by a user message containing tool_results —
-        typically from an exception that fired between the two history.append() calls.
-        Anthropic's API rejects these with a 400 on the NEXT request.
+        Two corruption modes (both cause a 400 on the next API call):
 
-        Strategy: scan backwards for the last orphaned assistant[tool_use]; truncate
-        back to the assistant[text] message just before that corrupted turn.
+        Mode A — orphaned tool_use: assistant[tool_use] not immediately followed
+        by user[tool_results].  Caused by an exception mid-loop or a concurrent
+        request slipping a plain user message between the two appends.
+
+        Mode B — orphaned tool_results: user[tool_results] not preceded by
+        assistant[tool_use].  Caused by concurrent threads: one thread appends
+        assistant[tool_use], another thread appends its own user message, then the
+        first thread appends tool_results — leaving the tool_results paired with
+        the wrong predecessor.
+
+        Strategy: walk backwards, find the first broken pair, then truncate back
+        to the last clean assistant[text] message.
         """
         n = len(self.conversation_history)
-        for i in range(n - 1, -1, -1):
-            msg = self.conversation_history[i]
-            if msg.get("role") != "assistant":
-                continue
-            if not self._has_tool_use_in_content(msg.get("content")):
-                continue
-            # assistant[tool_use] found at index i
-            # check whether index i+1 has matching tool_results
-            if i + 1 < n:
-                nxt = self.conversation_history[i + 1]
-                nxt_content = nxt.get("content", [])
-                if (nxt.get("role") == "user"
-                        and isinstance(nxt_content, list)
-                        and nxt_content
-                        and isinstance(nxt_content[0], dict)
-                        and nxt_content[0].get("type") == "tool_result"):
-                    break  # valid pair — history is clean from here back
-            # Orphaned. Find the last clean assistant[text] before index i.
-            clean_end = -1
-            for j in range(i - 1, -1, -1):
+
+        def _clean_end_before(idx):
+            """Index of last assistant[text] strictly before idx, or -1."""
+            for j in range(idx - 1, -1, -1):
                 m = self.conversation_history[j]
                 if m.get("role") == "assistant" and not self._has_tool_use_in_content(m.get("content")):
-                    clean_end = j
-                    break
-            cutoff = clean_end + 1  # keep up to and including the clean assistant message
-            logger.warning(
-                "Sanitizing conversation history: found orphaned tool_use at index %d, "
-                "trimming %d message(s) back to index %d",
-                i, n - cutoff, cutoff - 1,
-            )
-            self.conversation_history = self.conversation_history[:cutoff]
-            return
+                    return j
+            return -1
+
+        for i in range(n - 1, -1, -1):
+            msg = self.conversation_history[i]
+
+            # --- Mode A: assistant[tool_use] not followed by tool_results ---
+            if msg.get("role") == "assistant" and self._has_tool_use_in_content(msg.get("content")):
+                if i + 1 < n and self._is_tool_results_message(self.conversation_history[i + 1]):
+                    break  # valid pair — stop scanning
+                clean_end = _clean_end_before(i)
+                cutoff = clean_end + 1
+                logger.warning(
+                    "Sanitizing history (Mode A): orphaned tool_use at index %d — "
+                    "trimming %d message(s)", i, n - cutoff,
+                )
+                self.conversation_history = self.conversation_history[:cutoff]
+                return
+
+            # --- Mode B: user[tool_results] not preceded by assistant[tool_use] ---
+            if self._is_tool_results_message(msg):
+                if i > 0 and self._has_tool_use_in_content(self.conversation_history[i - 1].get("content")):
+                    break  # valid pair — stop scanning
+                clean_end = _clean_end_before(i)
+                cutoff = clean_end + 1
+                logger.warning(
+                    "Sanitizing history (Mode B): orphaned tool_results at index %d — "
+                    "trimming %d message(s)", i, n - cutoff,
+                )
+                self.conversation_history = self.conversation_history[:cutoff]
+                return
 
     def chat(self, user_message: str, status_callback=None, user_name: str = "Unknown") -> str:
         """
         Send a message to the LLM and handle tool calls.
 
+        Holds self._chat_lock for the entire call: Flask runs threaded=True so
+        concurrent HTTP requests share this singleton — without the lock, two
+        requests race on conversation_history and corrupt it.
+
         status_callback: optional callable(str) called with status updates during tool execution.
         """
+        with self._chat_lock:
+            return self._chat_impl(user_message, status_callback=status_callback, user_name=user_name)
+
+    def _chat_impl(self, user_message: str, status_callback=None, user_name: str = "Unknown") -> str:
+        """Actual chat logic — called only while holding _chat_lock."""
         # If waiting for MyStudio OTP, handle before passing to LLM
         if self._awaiting_mystudio_otp:
             result = self._handle_otp_submission(user_message)

@@ -1,4 +1,5 @@
 """Tests for ChatbotEngine helper methods — no API calls, no LLM."""
+import threading
 import pytest
 from datetime import date
 from unittest.mock import patch, MagicMock
@@ -15,6 +16,7 @@ def _make_engine():
     engine._last_schedule_fetched = False
     engine._last_any_tool_ran = False
     engine._last_export_label = None
+    engine._chat_lock = threading.Lock()
     return engine
 
 
@@ -419,3 +421,60 @@ class TestSanitizeHistory:
         e._sanitize_history()
         e._sanitize_history()
         assert len(e.conversation_history) == 2
+
+    # ------------------------------------------------------------------
+    # Mode B: orphaned tool_results (no preceding tool_use) — race condition
+    # ------------------------------------------------------------------
+
+    def test_orphaned_tool_results_at_end_trimmed(self):
+        """
+        user[tool_results] whose preceding message is NOT assistant[tool_use]
+        (Mode B — the race condition seen in Railway: a concurrent thread slips
+        a plain user message between the tool_use append and tool_results append,
+        so tool_results ends up paired with the wrong predecessor).
+        """
+        history = [
+            {"role": "user", "content": "schedule?"},
+            {"role": "assistant", "content": [_text_block()]},           # clean ← keep
+            {"role": "user", "content": "who is Veshant?"},              # interloper
+            {"role": "user", "content": [_tool_result_block("tu_x")]},  # orphaned
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        assert len(e.conversation_history) == 2
+        assert e.conversation_history[-1]["role"] == "assistant"
+
+    def test_valid_tool_results_preceded_by_tool_use_unchanged(self):
+        """Mode B detector must not flag a correctly-paired tool_results message."""
+        history = [
+            {"role": "user", "content": "who is Veshant?"},
+            {"role": "assistant", "content": [_tool_use_block("tu_1")]},
+            {"role": "user", "content": [_tool_result_block("tu_1")]},
+            {"role": "assistant", "content": [_text_block()]},
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        assert len(e.conversation_history) == 4
+
+    def test_mode_b_no_prior_clean_state_clears_all(self):
+        """Mode B: orphaned tool_results with no prior assistant[text] → clear all."""
+        history = [
+            {"role": "user", "content": "schedule?"},
+            {"role": "user", "content": [_tool_result_block("tu_x")]},
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        assert e.conversation_history == []
+
+    # ------------------------------------------------------------------
+    # Thread-safety
+    # ------------------------------------------------------------------
+
+    def test_chat_lock_exists(self):
+        """ChatbotEngine must expose _chat_lock so concurrent requests are serialized."""
+        import threading
+        e = _make_engine()
+        assert hasattr(e, "_chat_lock")
+        # threading.Lock() returns a _thread.lock; isinstance check via a known lock
+        lock = threading.Lock()
+        assert type(e._chat_lock) == type(lock)
