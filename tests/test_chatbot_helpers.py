@@ -230,3 +230,192 @@ class TestExportLabel:
 
         assert engine._last_export_label == "gbs_tours"
         assert engine._last_appointments == []
+
+
+# ---------------------------------------------------------------------------
+# _has_tool_use_in_content  and  _sanitize_history
+# ---------------------------------------------------------------------------
+
+def _tool_use_block(tool_id="tu_abc"):
+    return {"type": "tool_use", "id": tool_id, "name": "get_full_schedule", "input": {}}
+
+def _tool_result_block(tool_id="tu_abc"):
+    return {"type": "tool_result", "tool_use_id": tool_id, "content": "some result"}
+
+def _text_block():
+    return {"type": "text", "text": "Here is the schedule."}
+
+# Minimal Anthropic-SDK-style object (has .type attribute, not a dict)
+class _FakeBlock:
+    def __init__(self, type_):
+        self.type = type_
+
+class TestHasToolUseInContent:
+    def _e(self):
+        return _make_engine()
+
+    def test_empty_list_returns_false(self):
+        assert self._e()._has_tool_use_in_content([]) is False
+
+    def test_plain_string_returns_false(self):
+        assert self._e()._has_tool_use_in_content("some text") is False
+
+    def test_text_block_dict_returns_false(self):
+        assert self._e()._has_tool_use_in_content([_text_block()]) is False
+
+    def test_tool_result_dict_returns_false(self):
+        assert self._e()._has_tool_use_in_content([_tool_result_block()]) is False
+
+    def test_tool_use_dict_returns_true(self):
+        assert self._e()._has_tool_use_in_content([_tool_use_block()]) is True
+
+    def test_mixed_blocks_with_tool_use_returns_true(self):
+        content = [_text_block(), _tool_use_block()]
+        assert self._e()._has_tool_use_in_content(content) is True
+
+    def test_sdk_style_object_tool_use_returns_true(self):
+        # Anthropic SDK stores ToolUseBlock objects with a .type attribute
+        content = [_FakeBlock("tool_use")]
+        assert self._e()._has_tool_use_in_content(content) is True
+
+    def test_sdk_style_object_text_returns_false(self):
+        content = [_FakeBlock("text")]
+        assert self._e()._has_tool_use_in_content(content) is False
+
+
+class TestSanitizeHistory:
+    """
+    Verify _sanitize_history() removes orphaned tool_use blocks from the
+    conversation history tail without touching valid history.
+    """
+
+    def _e(self, history):
+        engine = _make_engine()
+        engine.conversation_history = history
+        return engine
+
+    # ------------------------------------------------------------------
+    # Cases that should NOT change history
+    # ------------------------------------------------------------------
+
+    def test_empty_history_unchanged(self):
+        e = self._e([])
+        e._sanitize_history()
+        assert e.conversation_history == []
+
+    def test_clean_text_only_history_unchanged(self):
+        history = [
+            {"role": "user", "content": "What is the schedule?"},
+            {"role": "assistant", "content": [_text_block()]},
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        assert len(e.conversation_history) == 2
+
+    def test_valid_tool_use_with_results_unchanged(self):
+        """tool_use immediately followed by tool_results is valid — must not be trimmed."""
+        history = [
+            {"role": "user", "content": "What is the schedule?"},
+            {"role": "assistant", "content": [_tool_use_block("tu_1")]},
+            {"role": "user", "content": [_tool_result_block("tu_1")]},
+            {"role": "assistant", "content": [_text_block()]},
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        assert len(e.conversation_history) == 4
+
+    def test_multi_turn_all_valid_unchanged(self):
+        history = [
+            {"role": "user", "content": "schedule?"},
+            {"role": "assistant", "content": [_tool_use_block("tu_1")]},
+            {"role": "user", "content": [_tool_result_block("tu_1")]},
+            {"role": "assistant", "content": [_text_block()]},
+            {"role": "user", "content": "who is Veshant?"},
+            {"role": "assistant", "content": [_tool_use_block("tu_2")]},
+            {"role": "user", "content": [_tool_result_block("tu_2")]},
+            {"role": "assistant", "content": [_text_block()]},
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        assert len(e.conversation_history) == 8
+
+    # ------------------------------------------------------------------
+    # Cases that SHOULD trim history
+    # ------------------------------------------------------------------
+
+    def test_orphaned_tool_use_at_end_trimmed(self):
+        """
+        assistant[tool_use] with nothing after it → must be removed.
+        The prior clean assistant[text] becomes the new tail.
+        """
+        history = [
+            {"role": "user", "content": "schedule?"},
+            {"role": "assistant", "content": [_text_block()]},      # clean end state
+            {"role": "user", "content": "who is Veshant?"},
+            {"role": "assistant", "content": [_tool_use_block()]},  # orphaned
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        # Should keep only the first two messages (up to and including the clean assistant)
+        assert len(e.conversation_history) == 2
+        assert e.conversation_history[-1]["role"] == "assistant"
+        assert not e._has_tool_use_in_content(e.conversation_history[-1]["content"])
+
+    def test_orphaned_tool_use_followed_by_plain_user_msg_trimmed(self):
+        """
+        assistant[tool_use] followed by a plain user text (not tool_results) is
+        also corrupt — the plain user message is part of the corrupted turn.
+        """
+        history = [
+            {"role": "user", "content": "schedule?"},
+            {"role": "assistant", "content": [_text_block()]},      # clean
+            {"role": "user", "content": "who is Veshant?"},
+            {"role": "assistant", "content": [_tool_use_block()]},  # orphaned
+            {"role": "user", "content": "What is my full schedule today?"},  # new request on top
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        assert len(e.conversation_history) == 2
+        assert e.conversation_history[-1]["role"] == "assistant"
+
+    def test_orphaned_at_very_start_clears_all(self):
+        """
+        If there is no prior clean assistant[text] to fall back to,
+        the entire history is cleared.
+        """
+        history = [
+            {"role": "user", "content": "schedule?"},
+            {"role": "assistant", "content": [_tool_use_block()]},  # orphaned, nothing before it
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        assert e.conversation_history == []
+
+    def test_orphaned_preserves_earlier_valid_turns(self):
+        """
+        Multiple valid turns followed by one corrupt turn: only the corrupt
+        turn is removed; earlier valid history is preserved.
+        """
+        history = [
+            {"role": "user", "content": "turn 1"},
+            {"role": "assistant", "content": [_tool_use_block("tu_1")]},
+            {"role": "user", "content": [_tool_result_block("tu_1")]},
+            {"role": "assistant", "content": [_text_block()]},   # valid end ← cutoff here
+            {"role": "user", "content": "turn 2"},
+            {"role": "assistant", "content": [_tool_use_block("tu_2")]},  # orphaned
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        assert len(e.conversation_history) == 4
+        assert e.conversation_history[-1]["content"] == [_text_block()]
+
+    def test_idempotent_after_clean(self):
+        """Calling sanitize twice on already-clean history is a no-op."""
+        history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [_text_block()]},
+        ]
+        e = self._e(history)
+        e._sanitize_history()
+        e._sanitize_history()
+        assert len(e.conversation_history) == 2
