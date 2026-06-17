@@ -578,7 +578,7 @@ def index():
 
                 <div class="sidebar-divider"></div>
                 <h3>Export</h3>
-                <a id="sidebarDownloadBtn" class="download-btn" href="#" title="Fetch a schedule first">📊 Download as Excel</a>
+                <button id="sidebarDownloadBtn" class="download-btn" onclick="triggerDownload()" title="Fetch a schedule first" disabled>📊 Download as Excel</button>
 
                 <div class="sidebar-divider"></div>
                 <h3>Feedback</h3>
@@ -636,23 +636,32 @@ def index():
             return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
         }
 
+        let sidebarDownloadUrl = null;
+
+        function triggerDownload() {
+            if (sidebarDownloadUrl) window.open(sidebarDownloadUrl, '_blank');
+        }
+
         function updateSidebarDownload(exportType, exportLabel) {
             const btn = document.getElementById('sidebarDownloadBtn');
             if (!btn) return;
             if (exportType === 'tours') {
-                btn.href = '/api/export/tours';
+                sidebarDownloadUrl = '/api/export/tours';
                 btn.textContent = exportLabel === 'gbs_tours' ? '📊 Download GBS tours' : '📊 Download full schedule';
                 btn.title = '';
+                btn.disabled = false;
                 btn.classList.add('ready');
             } else if (exportType === 'camps') {
-                btn.href = '/api/export/camps';
+                sidebarDownloadUrl = '/api/export/camps';
                 btn.textContent = '📊 Download camps as Excel';
                 btn.title = '';
+                btn.disabled = false;
                 btn.classList.add('ready');
             } else if (exportType === 'none') {
-                btn.href = '#';
+                sidebarDownloadUrl = null;
                 btn.textContent = '📊 Download as Excel';
                 btn.title = 'Fetch a schedule first';
+                btn.disabled = true;
                 btn.classList.remove('ready');
             }
             // null = Claude answered from context, no tool ran — leave button as-is
@@ -734,12 +743,7 @@ def index():
         });
         document.getElementById('message').focus();
 
-        // Warn before closing/refreshing so staff don't lose their session accidentally
-        window.addEventListener('beforeunload', e => {
-            e.preventDefault();
-            e.returnValue = '';
-        });
-        </script>
+</script>
     </body>
     </html>
     """
