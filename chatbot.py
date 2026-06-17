@@ -79,6 +79,63 @@ class ChatbotEngine:
         "get_camp_details":         "Fetching camp info from MyStudio...",
     }
 
+    @staticmethod
+    def _has_tool_use_in_content(content) -> bool:
+        """Return True if content contains any tool_use blocks."""
+        if not isinstance(content, list):
+            return False
+        for block in content:
+            block_type = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
+            if block_type == "tool_use":
+                return True
+        return False
+
+    def _sanitize_history(self) -> None:
+        """
+        Remove any corrupted tail from conversation_history.
+
+        An orphaned tool_use occurs when an assistant message with tool_use blocks
+        is not immediately followed by a user message containing tool_results —
+        typically from an exception that fired between the two history.append() calls.
+        Anthropic's API rejects these with a 400 on the NEXT request.
+
+        Strategy: scan backwards for the last orphaned assistant[tool_use]; truncate
+        back to the assistant[text] message just before that corrupted turn.
+        """
+        n = len(self.conversation_history)
+        for i in range(n - 1, -1, -1):
+            msg = self.conversation_history[i]
+            if msg.get("role") != "assistant":
+                continue
+            if not self._has_tool_use_in_content(msg.get("content")):
+                continue
+            # assistant[tool_use] found at index i
+            # check whether index i+1 has matching tool_results
+            if i + 1 < n:
+                nxt = self.conversation_history[i + 1]
+                nxt_content = nxt.get("content", [])
+                if (nxt.get("role") == "user"
+                        and isinstance(nxt_content, list)
+                        and nxt_content
+                        and isinstance(nxt_content[0], dict)
+                        and nxt_content[0].get("type") == "tool_result"):
+                    break  # valid pair — history is clean from here back
+            # Orphaned. Find the last clean assistant[text] before index i.
+            clean_end = -1
+            for j in range(i - 1, -1, -1):
+                m = self.conversation_history[j]
+                if m.get("role") == "assistant" and not self._has_tool_use_in_content(m.get("content")):
+                    clean_end = j
+                    break
+            cutoff = clean_end + 1  # keep up to and including the clean assistant message
+            logger.warning(
+                "Sanitizing conversation history: found orphaned tool_use at index %d, "
+                "trimming %d message(s) back to index %d",
+                i, n - cutoff, cutoff - 1,
+            )
+            self.conversation_history = self.conversation_history[:cutoff]
+            return
+
     def chat(self, user_message: str, status_callback=None, user_name: str = "Unknown") -> str:
         """
         Send a message to the LLM and handle tool calls.
@@ -100,6 +157,11 @@ class ChatbotEngine:
         logger.info("User query: %s", user_message[:120])
         request_start = time.monotonic()
         _tracker = self._analytics.start_query(user_message, query_type="natural_language", user=user_name)
+
+        # Remove any orphaned tool_use blocks left by a previously interrupted turn.
+        # Must run before appending the new user message so we don't create two
+        # consecutive user messages on top of a dangling assistant[tool_use].
+        self._sanitize_history()
 
         self.conversation_history.append({
             "role": "user",
@@ -130,31 +192,54 @@ class ChatbotEngine:
                         "content": f"[Using tools: {[t['name'] for t in tool_calls]}]"
                     })
 
-                # Execute every tool call and collect results
+                # Execute every tool call and collect results.
+                # Wrapped in try/except so tool_results are ALWAYS appended even if
+                # something unexpected fires mid-loop (analytics, logger, status_callback).
+                # An orphaned assistant[tool_use] with no following tool_results causes a
+                # 400 on the very next API call.
                 tool_results = []
-                for tool_call in tool_calls:
-                    tool_name = tool_call["name"]
-                    tool_input = tool_call["input"]
-                    tool_id = tool_call["id"]
+                try:
+                    for tool_call in tool_calls:
+                        tool_name = tool_call["name"]
+                        tool_input = tool_call["input"]
+                        tool_id = tool_call["id"]
 
-                    logger.info("Tool call: %s | inputs: %s", tool_name, json.dumps(tool_input))
+                        logger.info("Tool call: %s | inputs: %s", tool_name, json.dumps(tool_input, default=str))
 
-                    if status_callback:
-                        status_callback(self._TOOL_STATUS.get(tool_name, f"Running {tool_name}..."))
+                        if status_callback:
+                            try:
+                                status_callback(self._TOOL_STATUS.get(tool_name, f"Running {tool_name}..."))
+                            except Exception:
+                                pass
 
-                    tool_start = time.monotonic()
-                    tool_result = self._execute_tool(tool_name, tool_input)
-                    tool_elapsed = time.monotonic() - tool_start
-                    logger.info("Tool done: %s | %.1fs | result: %d chars", tool_name, tool_elapsed, len(tool_result))
-                    _tracker.record_tool(tool_name, tool_input, tool_elapsed)
+                        tool_start = time.monotonic()
+                        tool_result = self._execute_tool(tool_name, tool_input)
+                        tool_elapsed = time.monotonic() - tool_start
+                        logger.info("Tool done: %s | %.1fs | result: %d chars", tool_name, tool_elapsed, len(tool_result))
+                        try:
+                            _tracker.record_tool(tool_name, tool_input, tool_elapsed)
+                        except Exception:
+                            pass
 
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_id,
-                        "content": tool_result,
-                    })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": tool_result,
+                        })
+                except Exception as _tool_exc:
+                    logger.error("Unexpected exception during tool execution batch: %s", _tool_exc)
+                    # Backfill synthetic errors for any tool calls that didn't complete.
+                    completed_ids = {r["tool_use_id"] for r in tool_results}
+                    for tc in tool_calls:
+                        if tc["id"] not in completed_ids:
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tc["id"],
+                                "content": "Internal error — tool did not complete.",
+                            })
 
-                # Add all results in one user message — Anthropic requires this
+                # Add all results in one user message — Anthropic requires this,
+                # and must happen unconditionally to keep history valid.
                 self.conversation_history.append({
                     "role": "user",
                     "content": tool_results,
