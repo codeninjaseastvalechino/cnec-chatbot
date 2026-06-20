@@ -60,9 +60,9 @@ class ChatbotEngine:
         self._awaiting_mystudio_otp = False
         self._analytics = QueryAnalytics()
         self._last_camp_data = None    # Cache for Excel export: {"camps": [...], "rosters": {...}}
-        self._last_schedule_fetched = False   # True when a schedule tool ran this turn
-        self._last_any_tool_ran = False       # True when any tool ran this turn
-        self._last_export_label = None        # Human label for what's cached: "full_schedule", "gbs_tours", "camps"
+        self._last_gbs_sessions = None        # Set when any schedule tool runs; None = nothing fetched yet
+        self._last_appointments = None        # Companion to _last_gbs_sessions
+        self._last_export_label = None        # "full_schedule", "gbs_tours", or "camps"
 
         # Serialize all chat() calls — Flask runs with threaded=True so concurrent
         # requests share this singleton and race on conversation_history.
@@ -191,8 +191,6 @@ class ChatbotEngine:
             self.conversation_history.append({"role": "assistant", "content": result})
             return result
 
-        self._last_schedule_fetched = False
-        self._last_any_tool_ran = False
         logger.info("User query: %s", user_message[:120])
         request_start = time.monotonic()
         _tracker = self._analytics.start_query(user_message, query_type="natural_language", user=user_name)
@@ -589,8 +587,6 @@ Be concise and friendly. Staff are busy — get to the point."""
         """Return tool definitions for the LLM. Auto-populated from registry."""
         return [entry["definition"] for entry in self._tools.values()]
 
-    _SCHEDULE_TOOLS = {"get_full_schedule", "get_gbs_tours", "get_upcoming_gbs_tours"}
-
     def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
         """
         Dispatch a tool call to its registered handler.
@@ -599,9 +595,6 @@ Be concise and friendly. Staff are busy — get to the point."""
         if tool_name not in self._tools:
             logger.warning("Unknown tool requested: %s", tool_name)
             return f"Unknown tool: {tool_name}. Available tools: {list(self._tools.keys())}"
-        self._last_any_tool_ran = True
-        if tool_name in self._SCHEDULE_TOOLS:
-            self._last_schedule_fetched = True
         try:
             return self._tools[tool_name]["handler"](tool_input)
         except Exception as e:

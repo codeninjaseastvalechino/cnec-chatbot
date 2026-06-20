@@ -657,14 +657,13 @@ def index():
                 btn.title = '';
                 btn.disabled = false;
                 btn.classList.add('ready');
-            } else if (exportType === 'none') {
+            } else {
                 sidebarDownloadUrl = null;
                 btn.textContent = '📊 Download as Excel';
                 btn.title = 'Fetch a schedule first';
                 btn.disabled = true;
                 btn.classList.remove('ready');
             }
-            // null = Claude answered from context, no tool ran — leave button as-is
         }
 
         function sendMessage() {
@@ -810,22 +809,17 @@ def chat():
             chatbot._last_camp_data = None
         response_text = chatbot.chat(user_message, status_callback=lambda msg: statuses.append(msg), user_name=user_name)
         audit.log_event("assistant_response", {"message": response_text, "user": user_name})
-        # Tell the client which export endpoint to use
-        # "tours"/"camps" → schedule ran, enable button
-        # "none"          → non-schedule tool ran, disable button
-        # null            → Claude answered from context, leave button as-is
+        # Enable download button if any schedule data is cached this session.
+        # Button stays green after student lookups, cancels, etc. — cache persists.
         camp_data = getattr(chatbot, "_last_camp_data", None)
-        schedule_fetched = getattr(chatbot, "_last_schedule_fetched", False)
-        any_tool_ran = getattr(chatbot, "_last_any_tool_ran", False)
+        gbs_sessions = getattr(chatbot, "_last_gbs_sessions", None)
         export_label = getattr(chatbot, "_last_export_label", None)
         if camp_data and camp_data.get("camps"):
             export_type = "camps"
-        elif schedule_fetched:
+        elif gbs_sessions is not None:
             export_type = "tours"
-        elif any_tool_ran:
-            export_type = "none"
         else:
-            export_type = None
+            export_type = None  # nothing fetched yet — keep button disabled
         return jsonify({"response": response_text, "statuses": statuses, "export_type": export_type, "export_label": export_label})
     except Exception as e:
         logger.error("Chat error: %s", e)

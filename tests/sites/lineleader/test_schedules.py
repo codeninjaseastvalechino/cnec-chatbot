@@ -289,7 +289,7 @@ class TestGetUpcomingGbsTours:
 
     def test_respects_limit(self):
         items = [
-            self._make_action_item(f"2026-06-{12+i}T20:00:00+00:00", item_id=str(i))
+            self._make_action_item(f"2030-07-{10+i}T20:00:00+00:00", item_id=str(i))
             for i in range(10)
         ]
         sessions = self._run([], items, limit=3)

@@ -13,8 +13,8 @@ def _make_engine():
     engine._tools = {}
     engine._awaiting_mystudio_otp = False
     engine.conversation_history = []
-    engine._last_schedule_fetched = False
-    engine._last_any_tool_ran = False
+    engine._last_gbs_sessions = None
+    engine._last_appointments = None
     engine._last_export_label = None
     engine._chat_lock = threading.Lock()
     return engine
@@ -114,70 +114,24 @@ class TestOtpConversationHistory:
 # _execute_tool — flag tracking
 # ---------------------------------------------------------------------------
 
-class TestExecuteToolFlags:
-    def test_any_tool_ran_set_for_schedule_tool(self):
+class TestExecuteToolCaching:
+    def test_unknown_tool_returns_error_message(self):
         engine = _make_engine()
-        _register_fake_tool(engine, "get_gbs_tours")
-        engine._execute_tool("get_gbs_tours", {})
-        assert engine._last_any_tool_ran is True
+        result = engine._execute_tool("nonexistent_tool", {})
+        assert "Unknown tool" in result
 
-    def test_any_tool_ran_set_for_non_schedule_tool(self):
+    def test_gbs_sessions_starts_none(self):
         engine = _make_engine()
+        assert engine._last_gbs_sessions is None
+
+    def test_non_schedule_tool_does_not_clear_gbs_cache(self):
+        """lookup_student should not touch _last_gbs_sessions."""
+        engine = _make_engine()
+        fake_sessions = [MagicMock()]
+        engine._last_gbs_sessions = fake_sessions
         _register_fake_tool(engine, "lookup_student")
         engine._execute_tool("lookup_student", {})
-        assert engine._last_any_tool_ran is True
-
-    def test_schedule_fetched_set_for_get_gbs_tours(self):
-        engine = _make_engine()
-        _register_fake_tool(engine, "get_gbs_tours")
-        engine._execute_tool("get_gbs_tours", {})
-        assert engine._last_schedule_fetched is True
-
-    def test_schedule_fetched_set_for_get_full_schedule(self):
-        engine = _make_engine()
-        _register_fake_tool(engine, "get_full_schedule")
-        engine._execute_tool("get_full_schedule", {})
-        assert engine._last_schedule_fetched is True
-
-    def test_schedule_fetched_set_for_get_upcoming_gbs_tours(self):
-        engine = _make_engine()
-        _register_fake_tool(engine, "get_upcoming_gbs_tours")
-        engine._execute_tool("get_upcoming_gbs_tours", {})
-        assert engine._last_schedule_fetched is True
-
-    def test_schedule_fetched_not_set_for_lookup_student(self):
-        engine = _make_engine()
-        _register_fake_tool(engine, "lookup_student")
-        engine._execute_tool("lookup_student", {})
-        assert engine._last_schedule_fetched is False
-
-    def test_schedule_fetched_not_set_for_cancel_session(self):
-        engine = _make_engine()
-        _register_fake_tool(engine, "cancel_student_session")
-        engine._execute_tool("cancel_student_session", {})
-        assert engine._last_schedule_fetched is False
-
-    def test_unknown_tool_does_not_set_flags(self):
-        engine = _make_engine()
-        engine._execute_tool("nonexistent_tool", {})
-        assert engine._last_any_tool_ran is False
-        assert engine._last_schedule_fetched is False
-
-    def test_flags_reset_between_calls(self):
-        engine = _make_engine()
-        _register_fake_tool(engine, "get_gbs_tours")
-        _register_fake_tool(engine, "lookup_student")
-
-        engine._execute_tool("get_gbs_tours", {})
-        assert engine._last_schedule_fetched is True
-
-        # Simulate chat() reset at start of next turn
-        engine._last_schedule_fetched = False
-        engine._last_any_tool_ran = False
-
-        engine._execute_tool("lookup_student", {})
-        assert engine._last_schedule_fetched is False
-        assert engine._last_any_tool_ran is True
+        assert engine._last_gbs_sessions is fake_sessions  # unchanged
 
 
 # ---------------------------------------------------------------------------
