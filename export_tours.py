@@ -330,15 +330,15 @@ async def create_unified_excel_file(gbs_sessions, appointments, filename=None):
         bottom=Side(style='thin')
     )
 
-    # Set column widths: Time | Student | Type | Belt | Parent
-    ws.column_dimensions['A'].width = 12  # Time
+    # Set column widths: Date & Time | Student | Type | Belt | Parent
+    ws.column_dimensions['A'].width = 22  # Date & Time
     ws.column_dimensions['B'].width = 22  # Student
     ws.column_dimensions['C'].width = 18  # Type
     ws.column_dimensions['D'].width = 15  # Belt
     ws.column_dimensions['E'].width = 22  # Parent
 
     # Add headers
-    headers = ['Time', 'Student', 'Type', 'Belt', 'Parent']
+    headers = ['Date & Time', 'Student', 'Type', 'Belt', 'Parent']
     for col_num, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_num)
         cell.value = header
@@ -353,8 +353,8 @@ async def create_unified_excel_file(gbs_sessions, appointments, filename=None):
         if t.tzinfo is not None:
             t = t.astimezone()  # Convert UTC → local for GBS sessions
 
-        # Time
-        ws.cell(row=row_num, column=1).value = t.strftime("%I:%M %p").lstrip("0")
+        # Date & Time
+        ws.cell(row=row_num, column=1).value = t.strftime("%a %b %-d · %-I:%M %p")
         ws.cell(row=row_num, column=1).border = border
         ws.cell(row=row_num, column=1).alignment = Alignment(horizontal="center")
 
@@ -390,8 +390,14 @@ async def create_unified_excel_file(gbs_sessions, appointments, filename=None):
 
     # Save file
     if not filename:
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        filename = f"schedule_{date_str}.xlsx"
+        dates = sorted({
+            (item["time"].astimezone().date() if item["time"].tzinfo else item["time"].date())
+            for item in items
+        })
+        if len(dates) == 1:
+            filename = f"schedule_{dates[0].strftime('%Y-%m-%d')}.xlsx"
+        else:
+            filename = f"schedule_{dates[0].strftime('%Y-%m-%d')}_to_{dates[-1].strftime('%Y-%m-%d')}.xlsx"
 
     export_dir = Path("exports")
     export_dir.mkdir(exist_ok=True)
