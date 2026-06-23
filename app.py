@@ -102,6 +102,7 @@ def index():
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
                 background: #0a1020;
                 height: 100vh;
+                height: 100dvh;
                 margin: 0;
                 overflow: hidden;
             }
@@ -109,6 +110,7 @@ def index():
             .container {
                 width: 100%;
                 height: 100vh;
+                height: 100dvh;
                 background: var(--cn-navy-deep);
                 display: flex;
                 flex-direction: row;
@@ -211,6 +213,21 @@ def index():
 
             @media (max-width: 768px) {
                 .sidebar { display: none; }
+                /* Header: shrink logo + hide subtitle + clamp title to one line */
+                .header { padding: 10px 12px; gap: 10px; justify-content: flex-start; }
+                .header img { height: 28px; flex-shrink: 0; }
+                .header-text { min-width: 0; flex: 1; }
+                .header-text h1 { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                .header-text p { display: none; }
+                #helpBtn { padding: 6px 10px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
+                /* Input row */
+                .input-area { padding: 10px 12px; gap: 8px; }
+                #message { padding: 10px 14px; font-size: 14px; }
+                button#sendBtn { padding: 10px 16px; font-size: 14px; }
+                /* Help modal rows stack vertically */
+                .help-feature { min-width: 0; width: 100%; }
+                .help-row { flex-direction: column; gap: 2px; }
+                .help-examples { padding-left: 0; }
             }
 
             .header {
@@ -481,8 +498,7 @@ def index():
             .chat-panel { position: relative; }
 
             @media (max-width: 768px) {
-                .bubble { max-width: 90%; }
-                .header-text h1 { font-size: 18px; }
+                .bubble { max-width: 92%; }
                 .header img { height: 36px; }
             }
         </style>
@@ -490,7 +506,7 @@ def index():
     <body>
         <!-- Who are you modal -->
         <div id="nameModal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:200;display:flex;align-items:center;justify-content:center;">
-            <div style="background:#162044;border:1px solid #243356;border-radius:16px;padding:36px 40px;width:360px;text-align:center;">
+            <div style="background:#162044;border:1px solid #243356;border-radius:16px;padding:28px 24px;width:min(360px,90vw);text-align:center;">
                 <div style="font-size:32px;margin-bottom:12px;">👋</div>
                 <h2 style="font-size:20px;font-weight:700;color:#ffffff;margin:0 0 6px;">Who's using the assistant?</h2>
                 <p style="font-size:13px;color:#eabb5c;margin:0 0 24px;">Select your name to get started</p>
@@ -525,7 +541,7 @@ def index():
 
                 <!-- Help Modal -->
                 <div id="helpModal" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100;overflow-y:auto;">
-                    <div style="max-width:680px;margin:40px auto;background:#162044;border:1px solid #243356;border-radius:16px;padding:32px;position:relative;">
+                    <div style="max-width:680px;margin:clamp(12px,4vw,40px) auto;background:#162044;border:1px solid #243356;border-radius:16px;padding:clamp(16px,4vw,32px);position:relative;">
                         <button onclick="toggleHelp()" style="position:absolute;top:16px;right:16px;background:transparent;border:none;color:#8ea4c8;font-size:20px;cursor:pointer;padding:4px 8px;border-radius:4px;">✕</button>
                         <h2 style="font-size:20px;font-weight:700;color:#ffffff;margin:0 0 4px;">What can I ask?</h2>
                         <p style="font-size:13px;color:#eabb5c;margin:0 0 24px;">Click any example to send it directly.</p>
@@ -633,7 +649,17 @@ def index():
         });
 
         function parseMarkdownLinks(text) {
-            return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+            // Escape HTML first to prevent XSS
+            let out = text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+            // Bold (**text**) and italic (*text*)
+            out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            // Markdown links [text](url)
+            out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+            return out;
         }
 
         let sidebarDownloadUrl = null;
