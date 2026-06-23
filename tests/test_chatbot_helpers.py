@@ -432,3 +432,146 @@ class TestSanitizeHistory:
         # threading.Lock() returns a _thread.lock; isinstance check via a known lock
         lock = threading.Lock()
         assert type(e._chat_lock) == type(lock)
+
+
+# ---------------------------------------------------------------------------
+# Past-event guard — reschedule / move blocked when session already passed
+# ---------------------------------------------------------------------------
+
+class TestPastEventGuard:
+    """
+    Both _handle_reschedule_tour (LineLeader) and _handle_move_student_session
+    (MyStudio) must reject write operations when the target session's start_time
+    is already in the past, including earlier today.
+    """
+
+    # -- Helpers ---------------------------------------------------------
+
+    def _make_past_gbs_session(self, minutes_ago=30):
+        from datetime import datetime, timedelta, timezone
+        session = MagicMock()
+        session.item_id = "tour-123"
+        # LineLeader start_time is UTC-aware (fromisoformat on API response)
+        session.start_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+        return session
+
+    def _make_future_gbs_session(self, minutes_ahead=60):
+        from datetime import datetime, timedelta, timezone
+        session = MagicMock()
+        session.item_id = "tour-123"
+        session.start_time = datetime.now(timezone.utc) + timedelta(minutes=minutes_ahead)
+        return session
+
+    def _make_student_appointment(self, start_offset_minutes):
+        """Return a StudentAppointment with start_time = now + offset (negative = past)."""
+        from datetime import datetime, timedelta
+        from sites.mystudio.appointments import StudentAppointment
+        start = datetime.now() + timedelta(minutes=start_offset_minutes)
+        return StudentAppointment(
+            id="appt-1",
+            student_name="Alex Test",
+            student_id="111",
+            parent_name="Parent Test",
+            phone="555-0000",
+            rank="White Belt",
+            appointment_type="CREATE (CODING)",
+            start_time=start,
+            end_time=start + timedelta(hours=1),
+            duration_minutes=60,
+            registration_detail_id="r1",
+            class_appointment_times_id="t1",
+            class_appointment_id="c1",
+        )
+
+    # -- _handle_reschedule_tour -----------------------------------------
+
+    def test_reschedule_tour_past_session_blocked(self):
+        """A tour whose start_time is in the past must be rejected before any write."""
+        engine = _make_engine()
+        past_session = self._make_past_gbs_session(minutes_ago=45)
+
+        with patch("chatbot.get_bearer_token", return_value="fake-token"), \
+             patch("chatbot.get_todays_sessions", return_value=[past_session]):
+            result = engine._handle_reschedule_tour({
+                "tour_id": "tour-123",
+                "date_str": "tomorrow",
+                "time_str": "3pm",
+            })
+
+        assert "already passed" in result.lower() or "past" in result.lower()
+        assert "cancel" in result.lower()
+
+    def test_reschedule_tour_future_session_proceeds(self):
+        """A tour in the future must NOT be blocked by the past-event guard."""
+        engine = _make_engine()
+        future_session = self._make_future_gbs_session(minutes_ahead=120)
+
+        with patch("chatbot.get_bearer_token", return_value="fake-token"), \
+             patch("chatbot.get_todays_sessions", return_value=[future_session]), \
+             patch("chatbot.reschedule_tour", return_value=(True, "Rescheduled OK")):
+            result = engine._handle_reschedule_tour({
+                "tour_id": "tour-123",
+                "date_str": "tomorrow",
+                "time_str": "3pm",
+            })
+
+        assert "successfully" in result.lower()
+
+    # -- _handle_move_student_session ------------------------------------
+
+    def test_move_student_past_session_blocked(self):
+        """Moving a session whose start_time is in the past must be rejected."""
+        engine = _make_engine()
+        past_appt = self._make_student_appointment(start_offset_minutes=-60)
+
+        fake_student = MagicMock()
+        fake_student.name = "Alex Test"
+        fake_student.student_id = "111"
+        fake_student.participant_id = "222"
+
+        # _resolve_tool_date returns a datetime matching the past appt's date so
+        # the session_match lookup succeeds, then the guard fires on start_time.
+        with patch.object(engine, "_resolve_tool_date",
+                          return_value=(past_appt.start_time, None)), \
+             patch.object(engine, "_resolve_student", return_value=(fake_student, None)), \
+             patch("sites.mystudio.students.get_student_upcoming_appointments",
+                   return_value=[past_appt]):
+            result = engine._handle_move_student_session({
+                "student_name": "Alex Test",
+                "from_date_str": "today",
+                "to_date_str": "tomorrow",
+                "to_time_str": "3pm",
+            })
+
+        assert "already passed" in result.lower() or "past" in result.lower()
+        assert "cancel" in result.lower()
+        assert "mystudio" in result.lower()
+
+    def test_move_student_future_session_not_blocked_by_guard(self):
+        """A session in the future must pass the guard and reach slot-lookup."""
+        engine = _make_engine()
+        future_appt = self._make_student_appointment(start_offset_minutes=120)
+
+        fake_student = MagicMock()
+        fake_student.name = "Alex Test"
+        fake_student.student_id = "111"
+        fake_student.participant_id = "222"
+
+        # _resolve_tool_date returns a datetime matching the future appt's date
+        # so session_match lookup succeeds, then the guard does NOT fire.
+        with patch.object(engine, "_resolve_tool_date",
+                          return_value=(future_appt.start_time, None)), \
+             patch.object(engine, "_resolve_student", return_value=(fake_student, None)), \
+             patch("sites.mystudio.students.get_student_upcoming_appointments",
+                   return_value=[future_appt]), \
+             patch("sites.mystudio.students.get_available_slots", return_value=[]) as mock_slots:
+            result = engine._handle_move_student_session({
+                "student_name": "Alex Test",
+                "from_date_str": "today",
+                "to_date_str": "tomorrow",
+                "to_time_str": "3pm",
+            })
+
+        # Guard did not fire — execution reached slot lookup
+        mock_slots.assert_called_once()
+        assert "already passed" not in result.lower()

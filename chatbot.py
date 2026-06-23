@@ -725,6 +725,17 @@ Be concise and friendly. Staff are busy — get to the point."""
             if not session:
                 return f"Tour {tour_id} not found."
 
+            from datetime import datetime as _dt, timezone as _tz
+            # start_time is UTC-aware; compare against UTC now to avoid TypeError
+            if session.start_time < _dt.now(_tz.utc):
+                local_dt = session.start_time.astimezone()
+                return (
+                    f"That tour has already passed "
+                    f"({local_dt.strftime('%I:%M %p').lstrip('0')} today). "
+                    "Past sessions can't be rescheduled — you can cancel it instead, "
+                    "and set up a new appointment directly in LineLeader."
+                )
+
             success, message = reschedule_tour(
                 bearer_token=self.bearer_token,
                 session=session,
@@ -853,6 +864,15 @@ Be concise and friendly. Staff are busy — get to the point."""
         )
         if not session_match:
             return f"No upcoming session found for {student.name} on {resolved_from.strftime('%A, %B %-d')}."
+
+        from datetime import datetime as _dt
+        if session_match.start_time < _dt.now():
+            return (
+                f"That session has already passed "
+                f"({session_match.start_time.strftime('%A, %B %-d')} at {session_match.time_display()}). "
+                "Past sessions can't be rescheduled. You can ask me to cancel it if needed, "
+                "then log into MyStudio to create a new appointment."
+            )
 
         # Find target slot — match by class title + time on target date
         try:
