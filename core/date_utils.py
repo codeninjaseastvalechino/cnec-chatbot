@@ -20,15 +20,19 @@ _MONTH_MAP = {
 }
 
 
-def resolve_date(date_str: str) -> datetime:
+def resolve_date(date_str: str, allow_past: bool = False) -> datetime:
     """
     Resolve a raw date phrase to a datetime (midnight, date portion only).
 
     Handles:
-      - Relative words: "today", "tomorrow"
+      - Relative words: "today", "tomorrow", "yesterday"
       - Day names: "Friday", "next Tuesday"
       - Month + day: "June 9th", "June 9"
+      - Slash format: "6/22", "6/22/26", "6/22/2026"
       - Combos: "Friday June 9th" (conflict-checked)
+
+    allow_past: if True, past dates are returned as-is instead of rolling forward
+                to next year/month. Use for operations that target past sessions.
 
     Raises ValueError with a user-friendly message on conflict or parse failure.
     """
@@ -39,15 +43,36 @@ def resolve_date(date_str: str) -> datetime:
         return datetime.combine(today, datetime.min.time())
     if s == "tomorrow":
         return datetime.combine(today + timedelta(days=1), datetime.min.time())
+    if s == "yesterday":
+        return datetime.combine(today - timedelta(days=1), datetime.min.time())
+
+    # Slash format: "6/22", "6/22/26", "6/22/2026"
+    import re as _re
+    slash_match = _re.match(r'^(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?$', s.strip())
+    if slash_match:
+        month = int(slash_match.group(1))
+        day = int(slash_match.group(2))
+        year_raw = slash_match.group(3)
+        if year_raw:
+            year = int(year_raw)
+            if year < 100:
+                year += 2000
+        else:
+            year = today.year
+            if not allow_past and date(year, month, day) < today:
+                year += 1
+        try:
+            return datetime.combine(date(year, month, day), datetime.min.time())
+        except ValueError:
+            raise ValueError(f"'{date_str}' is not a valid date.")
 
     # Ordinal-only: "8th", "the 8th", "11th", "1st", "2nd", "3rd"
-    import re as _re
     ordinal_match = _re.match(r'^(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?$', s.strip())
     if ordinal_match:
         day = int(ordinal_match.group(1))
         try:
             candidate = date(today.year, today.month, day)
-            if candidate < today:
+            if not allow_past and candidate < today:
                 # Roll to next month
                 if today.month == 12:
                     candidate = date(today.year + 1, 1, day)
@@ -72,7 +97,7 @@ def resolve_date(date_str: str) -> datetime:
                 month = _MONTH_MAP[token]
                 day = int(day_num)
                 year = today.year
-                if date(year, month, day) < today:
+                if not allow_past and date(year, month, day) < today:
                     year += 1
                 explicit_date = datetime(year, month, day)
                 break

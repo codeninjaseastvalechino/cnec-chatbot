@@ -276,6 +276,43 @@ def get_student_upcoming_appointments(
     return appointments
 
 
+def get_student_past_not_attended_appointments(
+    student_id: str,
+    participant_id: str,
+    days_back: int = 90,
+) -> List[StudentAppointment]:
+    """
+    Return past sessions with class_attendance_status == "Not Attended".
+
+    These are missed sessions that can still be cancelled (to clean up the record)
+    or used as the source when rescheduling a missed session to a future date.
+
+    Results are sorted most-recent-first.
+    Raises MystudioOTPRequired if session is expired.
+    """
+    sessions = get_student_sessions_by_type(
+        student_id, participant_id,
+        filter_type="P",
+        from_date=date.today().strftime("%Y-%m-%d"),
+        days=days_back,
+    )
+
+    statuses = set(s.get("class_attendance_status", "") for s in sessions)
+    logger.info("Past session statuses for student_id=%s: %s", student_id, statuses)
+
+    NOT_ATTENDED_STATUSES = {"not attended", "absent", "no show", "no-show"}
+    appointments = []
+    for s in sessions:
+        if s.get("class_attendance_status", "").lower() not in NOT_ATTENDED_STATUSES:
+            continue
+        appt = _parse_session_to_appointment(s)
+        if appt:
+            appointments.append(appt)
+
+    appointments.sort(key=lambda a: a.start_time, reverse=True)
+    return appointments
+
+
 def get_available_slots(date_str: str) -> List[Dict[str, Any]]:
     """
     Return class time slots on date_str that have remaining capacity.

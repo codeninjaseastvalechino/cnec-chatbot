@@ -510,6 +510,70 @@ Be concise and friendly. Staff are busy — get to the point."""
             handler=self._handle_lookup_student,
         )
         self._register(
+            name="get_student_recent_appointments",
+            description=(
+                "Fetch a student's most recent past sessions with actual attendance status for each. "
+                "Use when staff ask about recent or past appointments — e.g. "
+                "'show me Ayaan's last 5 appointments', 'what are his recent sessions?', "
+                "'show me her appointment history'. "
+                "Do NOT use for missed-only queries (use get_student_missed_appointments) "
+                "or for a specific date (use get_student_session_on_date)."
+            ),
+            parameters={
+                "student_name": {
+                    "type": "string",
+                    "description": "The student name exactly as the user said it.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of recent sessions to return. Defaults to 5.",
+                },
+            },
+            handler=self._handle_get_student_recent_appointments,
+        )
+        self._register(
+            name="get_student_session_on_date",
+            description=(
+                "Look up a student's session on a specific date — past or upcoming. "
+                "Returns what was scheduled and the attendance status (Attended, Not Attended, Scheduled). "
+                "Use when staff ask about a specific date — e.g. 'show me Ayaan's June 22nd appointment', "
+                "'did Alex attend on Friday?', 'what was scheduled for Journei on the 20th?'."
+            ),
+            parameters={
+                "student_name": {
+                    "type": "string",
+                    "description": "The student name exactly as the user said it.",
+                },
+                "date_str": {
+                    "type": "string",
+                    "description": "The date to look up, exactly as the user said it. Do not resolve — pass the raw phrase.",
+                },
+            },
+            handler=self._handle_get_student_session_on_date,
+        )
+        self._register(
+            name="get_student_missed_appointments",
+            description=(
+                "Fetch a student's past sessions that were missed (Not Attended, Absent, No Show). "
+                "Use ONLY when staff explicitly ask about missed, skipped, or not-attended sessions — e.g. "
+                "'show me Ayaan's missed appointments', 'what sessions did Alex miss?', "
+                "'list his not attended classes', 'which sessions did she skip?'. "
+                "Do NOT use for general appointment history or 'last N appointments' queries. "
+                "Returns up to the most recent missed sessions, most recent first."
+            ),
+            parameters={
+                "student_name": {
+                    "type": "string",
+                    "description": "The student name exactly as the user said it.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max number of missed sessions to return. Defaults to 5 if not specified.",
+                },
+            },
+            handler=self._handle_get_student_missed_appointments,
+        )
+        self._register(
             name="get_camp_details",
             description=(
                 "Fetch upcoming camp details from MyStudio. "
@@ -601,16 +665,17 @@ Be concise and friendly. Staff are busy — get to the point."""
             logger.error("Tool execution failed: tool=%s error=%s", tool_name, e)
             return f"Error running {tool_name}: {str(e)}"
 
-    def _resolve_tool_date(self, tool_input: dict, key: str = "date_str", default: str = "today"):
+    def _resolve_tool_date(self, tool_input: dict, key: str = "date_str", default: str = "today", allow_past: bool = False):
         """
         Resolve a raw date phrase from tool_input into a datetime.
         Returns (resolved_datetime, None) on success, (None, error_str) on failure.
         Handlers call this and return the error string immediately if it's not None.
+        allow_past: pass True for operations targeting past sessions (skips year-roll).
         """
         from core.date_utils import resolve_date
         raw = tool_input.get(key, "").strip()
         try:
-            return resolve_date(raw if raw else default), None
+            return resolve_date(raw if raw else default, allow_past=allow_past), None
         except ValueError as e:
             return None, str(e)
 
@@ -751,8 +816,15 @@ Be concise and friendly. Staff are busy — get to the point."""
             raise RuntimeError(f"Failed to reschedule tour: {e}")
 
     def _handle_cancel_student_session(self, tool_input: dict) -> str:
-        """Cancel a student session — single or all-future. Dry-run until confirmed=True."""
-        from sites.mystudio.students import get_student_upcoming_appointments
+        """Cancel a student session — single or all-future. Dry-run until confirmed=True.
+
+        Checks upcoming sessions first. If the date is in the past, falls back to
+        past Not Attended sessions (missed classes that can still be cleaned up).
+        """
+        from sites.mystudio.students import (
+            get_student_upcoming_appointments,
+            get_student_past_not_attended_appointments,
+        )
         from sites.mystudio.write import cancel_student_appointment
 
         student_name = tool_input.get("student_name", "").strip()
@@ -765,7 +837,7 @@ Be concise and friendly. Staff are busy — get to the point."""
         if not date_str:
             return "Please specify the date of the session to cancel."
 
-        resolved, err = self._resolve_tool_date(tool_input, key="date_str")
+        resolved, err = self._resolve_tool_date(tool_input, key="date_str", allow_past=True)
         if err:
             return err
         target_date_str = resolved.strftime("%Y-%m-%d")
@@ -774,6 +846,8 @@ Be concise and friendly. Staff are busy — get to the point."""
         if err:
             return err
 
+        # Try upcoming sessions first
+        is_past_session = False
         try:
             upcoming = get_student_upcoming_appointments(student.student_id, student.participant_id, days_ahead=60)
         except MystudioOTPRequired as _otp_exc:
@@ -784,12 +858,32 @@ Be concise and friendly. Staff are busy — get to the point."""
             (a for a in upcoming if a.start_time.strftime("%Y-%m-%d") == target_date_str),
             None,
         )
+
+        # Fall back to past not-attended sessions if no upcoming match
         if not session_match:
-            return f"No upcoming session found for {student.name} on {resolved.strftime('%A, %B %-d')}."
+            try:
+                past = get_student_past_not_attended_appointments(student.student_id, student.participant_id)
+            except MystudioOTPRequired as _otp_exc:
+                self._awaiting_mystudio_otp = True
+                return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
+
+            session_match = next(
+                (a for a in past if a.start_time.strftime("%Y-%m-%d") == target_date_str),
+                None,
+            )
+            if session_match:
+                is_past_session = True
+
+        if not session_match:
+            return (
+                f"No session found for {student.name} on {resolved.strftime('%A, %B %-d')}. "
+                f"If this was a missed session, it may have already been cancelled or marked Attended."
+            )
 
         scope_label = "this session and all future recurring sessions" if cancel_all_future else "this single session"
+        past_note = " (missed — Not Attended)" if is_past_session else ""
         summary = (
-            f"About to cancel: {student.name} — {session_match.appointment_type}\n"
+            f"About to cancel: {student.name} — {session_match.appointment_type}{past_note}\n"
             f"Date: {resolved.strftime('%A, %B %-d')} at {session_match.time_display()}\n"
             f"Scope: {scope_label}"
         )
@@ -1104,6 +1198,139 @@ Be concise and friendly. Staff are busy — get to the point."""
                 lines.append(f"  - {day} at {appt.time_display()} — {appt.appointment_type}")
         else:
             lines.append("No upcoming sessions in the next 30 days.")
+
+        return "\n".join(lines)
+
+    def _handle_get_student_recent_appointments(self, tool_input: dict) -> str:
+        """Return the last N past sessions for a student with real attendance status."""
+        from sites.mystudio.students import get_student_sessions_by_type
+        from datetime import date as _date
+
+        student_name = tool_input.get("student_name", "").strip()
+        limit = int(tool_input.get("limit") or 5)
+
+        if not student_name:
+            return "Please provide a student name."
+
+        student, err = self._resolve_student(student_name)
+        if err:
+            return err
+
+        try:
+            raw = get_student_sessions_by_type(
+                student.student_id, student.participant_id,
+                filter_type="P",
+                from_date=_date.today().strftime("%Y-%m-%d"),
+                days=90,
+            )
+        except MystudioOTPRequired as _otp_exc:
+            self._awaiting_mystudio_otp = True
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
+
+        if not raw:
+            return f"No past sessions found for {student.name} in the last 90 days."
+
+        # Sort most-recent-first, take limit
+        raw_sorted = sorted(raw, key=lambda s: s.get("server_program_date", ""), reverse=True)
+        shown = raw_sorted[:limit]
+
+        lines = [f"Last {len(shown)} session(s) for {student.name} (most recent first):"]
+        for s in shown:
+            date_label = s.get("p_date", s.get("server_program_date", ""))
+            time_str = s.get("start_time", "")
+            title = s.get("class_appointment_title", "Class")
+            status = s.get("class_attendance_status", "Unknown")
+            lines.append(f"  - {date_label} at {time_str} — {title} [{status}]")
+
+        return "\n".join(lines)
+
+    def _handle_get_student_session_on_date(self, tool_input: dict) -> str:
+        """Look up a student's session on a specific date — past or upcoming."""
+        from sites.mystudio.students import get_student_upcoming_appointments, get_student_sessions_by_type
+        from datetime import date as _date
+
+        student_name = tool_input.get("student_name", "").strip()
+        if not student_name:
+            return "Please provide a student name."
+        if not tool_input.get("date_str", "").strip():
+            return "Please provide a date to look up."
+
+        resolved, err = self._resolve_tool_date(tool_input, key="date_str", allow_past=True)
+        if err:
+            return err
+        target_date_str = resolved.strftime("%Y-%m-%d")
+        date_label = resolved.strftime("%A, %b %-d")
+
+        student, err = self._resolve_student(student_name)
+        if err:
+            return err
+
+        is_past = resolved.date() < _date.today()
+
+        try:
+            if not is_past:
+                appointments = get_student_upcoming_appointments(student.student_id, student.participant_id, days_ahead=90)
+                match = next((a for a in appointments if a.start_time.strftime("%Y-%m-%d") == target_date_str), None)
+                if match:
+                    return (
+                        f"{student.name} on {date_label}:\n"
+                        f"  {match.appointment_type} at {match.time_display()} — Scheduled"
+                    )
+                return f"No session found for {student.name} on {date_label}."
+
+            # Past date — fetch raw sessions to get attendance status
+            from datetime import date as _date2
+            days_back = (_date2.today() - resolved.date()).days + 1
+            raw = get_student_sessions_by_type(
+                student.student_id, student.participant_id,
+                filter_type="P",
+                from_date=_date2.today().strftime("%Y-%m-%d"),
+                days=days_back,
+            )
+        except MystudioOTPRequired as _otp_exc:
+            self._awaiting_mystudio_otp = True
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
+
+        matches = [s for s in raw if s.get("server_program_date", "") == target_date_str]
+        if not matches:
+            return f"No session found for {student.name} on {date_label}."
+
+        lines = [f"{student.name} on {date_label}:"]
+        for s in matches:
+            title = s.get("class_appointment_title", "Class")
+            status = s.get("class_attendance_status", "Unknown")
+            time_str = s.get("start_time", "")
+            lines.append(f"  {title} at {time_str} — {status}")
+        return "\n".join(lines)
+
+    def _handle_get_student_missed_appointments(self, tool_input: dict) -> str:
+        """List a student's past Not Attended sessions."""
+        from sites.mystudio.students import get_student_past_not_attended_appointments
+
+        student_name = tool_input.get("student_name", "").strip()
+        limit = int(tool_input.get("limit") or 5)
+
+        if not student_name:
+            return "Please provide a student name."
+
+        student, err = self._resolve_student(student_name)
+        if err:
+            return err
+
+        try:
+            missed = get_student_past_not_attended_appointments(student.student_id, student.participant_id)
+        except MystudioOTPRequired as _otp_exc:
+            self._awaiting_mystudio_otp = True
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
+
+        if not missed:
+            return f"No missed (Not Attended) sessions found for {student.name} in the last 90 days."
+
+        shown = missed[:limit]
+        lines = [f"Missed sessions for {student.name} (showing {len(shown)} of {len(missed)}):"]
+        for appt in shown:
+            day = appt.start_time.strftime("%A, %b %-d")
+            lines.append(f"  - {day} at {appt.time_display()} — {appt.appointment_type}")
 
         return "\n".join(lines)
 
