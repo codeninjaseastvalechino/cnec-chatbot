@@ -9,6 +9,7 @@ from sites.mystudio.students import (
     get_student_attendance_this_week,
     get_student_sessions_by_type,
     get_student_upcoming_appointments,
+    get_membership_reg_details,
     _parse_session_to_appointment,
 )
 from sites.mystudio.auth import MystudioOTPRequired
@@ -246,3 +247,59 @@ class TestGetStudentUpcomingAppointments:
         with patch("sites.mystudio.students.get_session", return_value=mock_session):
             appts = get_student_upcoming_appointments("259103", "296114")
         assert len(appts) == 1
+
+
+# ---------------------------------------------------------------------------
+# get_membership_reg_details
+# ---------------------------------------------------------------------------
+
+def _membership_reg_payload(**overrides):
+    data = {
+        "membership_title": "CREATE: Plus (2x/Week)",
+        "membership_category_title": "CODE NINJAS: CREATE",
+        "reg_no_of_classes": "2",
+        "reg_attendance_period": "CPW",
+        "preceding_payment_date": "2026-05-27",
+        "next_payment_date": "2026-06-27",
+        "membership_id": "5666",
+        "membership_option_id": "72587",
+        "membership_registration_id": "183462",
+    }
+    data.update(overrides)
+    return data
+
+
+class TestGetMembershipRegDetails:
+    def test_returns_msg_on_success(self):
+        payload = _membership_reg_payload()
+        json_data = {"status": "Success", "msg": payload}
+        mock_session = _mock_post_session(200, json_data)
+        with patch("sites.mystudio.students.get_session", return_value=mock_session):
+            result = get_membership_reg_details("183462")
+        assert result["membership_title"] == "CREATE: Plus (2x/Week)"
+        assert result["reg_no_of_classes"] == "2"
+        assert result["preceding_payment_date"] == "2026-05-27"
+        assert result["next_payment_date"] == "2026-06-27"
+
+    def test_posts_correct_payload(self):
+        json_data = {"status": "Success", "msg": _membership_reg_payload()}
+        mock_session = _mock_post_session(200, json_data)
+        with patch("sites.mystudio.students.get_session", return_value=mock_session):
+            get_membership_reg_details("183462")
+        call_kwargs = mock_session.post.call_args[1]
+        assert call_kwargs["json"]["selected_membership_id"] == "183462"
+        assert call_kwargs["json"]["company_id"] is not None
+
+    def test_non_success_status_returns_none(self):
+        json_data = {"status": "Failed", "msg": "error"}
+        mock_session = _mock_post_session(200, json_data)
+        with patch("sites.mystudio.students.get_session", return_value=mock_session):
+            result = get_membership_reg_details("183462")
+        assert result is None
+
+    def test_401_raises_otp_required(self):
+        mock_session = _mock_post_session(401)
+        with patch("sites.mystudio.students.get_session", return_value=mock_session):
+            with patch("sites.mystudio.students.clear_cached_cookies"):
+                with pytest.raises(MystudioOTPRequired):
+                    get_membership_reg_details("183462")

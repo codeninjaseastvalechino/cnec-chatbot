@@ -11,6 +11,7 @@ Endpoints:
   POST /v43/Api/PortalApi/getstudent                    — search by name
   GET  /v43/Api/PortalApi/getParticipantRegDetails      — profile, rank, sessions
   GET  /v43/Api/PortalApi/getParticipantRegDetailsByType — filtered sessions by type
+  POST /v43/Api/PortalApi/membersRegDetails             — plan frequency, billing cycle dates
 """
 
 from dataclasses import dataclass
@@ -311,6 +312,53 @@ def get_student_past_not_attended_appointments(
 
     appointments.sort(key=lambda a: a.start_time, reverse=True)
     return appointments
+
+
+def get_membership_reg_details(membership_registration_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch membership plan details for a specific registration.
+
+    POST /v43/Api/PortalApi/membersRegDetails
+
+    membership_registration_id: the reg_id from getParticipantRegDetails
+                                 (participant_details.reg_id)
+
+    Key fields in returned msg:
+      reg_no_of_classes      — sessions per week (e.g. "2")
+      reg_attendance_period  — always "CPW" (classes per week)
+      preceding_payment_date — billing cycle start date (YYYY-MM-DD)
+      next_payment_date      — billing cycle end ("Mon DD, YYYY")
+      membership_title       — full plan name ("CREATE: Plus (2x/Week)")
+    """
+    session = get_session()
+    payload = {
+        "company_id": COMPANY_ID,
+        "selected_membership_id": membership_registration_id,
+        "migration_flag": "",
+        "franchise_master_id": "5",
+        "franchise_program_id": "9",
+    }
+
+    try:
+        resp = session.post(
+            f"{BASE_URL}/membersRegDetails",
+            json=payload,
+            timeout=15,
+        )
+        if resp.status_code == 401:
+            clear_cached_cookies()
+            raise MystudioOTPRequired("MyStudio session expired.")
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != "Success":
+            logger.warning("membersRegDetails non-success: %s", data.get("status"))
+            return None
+        return data.get("msg", {})
+    except MystudioOTPRequired:
+        raise
+    except Exception as e:
+        logger.error("membersRegDetails failed (reg_id=%s): %s", membership_registration_id, e)
+        return None
 
 
 def get_available_slots(date_str: str) -> List[Dict[str, Any]]:

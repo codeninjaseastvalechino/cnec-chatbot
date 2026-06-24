@@ -146,6 +146,40 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ---
 
+### Session 2026-06-23 — Billing cycle intelligence for lookup_student
+
+**Changes made:**
+- ✅ **`sites/mystudio/students.py`** — new `get_membership_reg_details()`:
+  - `POST /v43/Api/PortalApi/membersRegDetails` with `selected_membership_id = reg_id`
+  - Returns `membership_title` (e.g. "CREATE: Plus (2x/Week)"), `reg_no_of_classes` (sessions/week), `reg_attendance_period` ("CPW"), `preceding_payment_date` (cycle start, YYYY-MM-DD), `next_payment_date` (cycle end, YYYY-MM-DD)
+  - `reg_id` comes from `getParticipantRegDetails → participant_details.reg_id` — no extra search needed
+- ✅ **`chatbot.py`** — `_handle_lookup_student` upgraded:
+  - Surfaces `membership_title` (program name) in output
+  - Uses `act_att` from `membership_details` for attended count (was manually counting raw session rows — incorrect)
+  - Computes `expected_this_cycle = floor(cycle_days / 7 × reg_no_of_classes)` from real plan data
+  - Computes `remaining = expected - attended` and shows it explicitly
+  - Uses `preceding_payment_date` directly for cycle start (was doing month-subtraction math — buggy)
+  - Annotates upcoming sessions that fall after `cycle_end` with `[next billing cycle]`
+  - Updated tool description: "this month" and "billing cycle" treated as equivalent — Claude answers directly without follow-up
+- ✅ **`tests/sites/mystudio/test_students.py`** — 4 new tests for `get_membership_reg_details`
+
+**Key discoveries:**
+- `act_att` in `membership_details` = attended sessions this billing cycle (not total ever) — matches `attendance_last_30_days` when cycle ≈ 30 days
+- `remaining_no_of_classes` in `membersRegDetails` is always "0" for monthly recurring plans — not useful
+- `next_payment_date` format differs between endpoints: `getParticipantRegDetails` returns "Jun 27, 2026" but `membersRegDetails` returns "2026-06-27" (ISO)
+- MyStudio schedules recurring sessions past billing cycle boundaries — a session on Jun 29 appears in the current cycle's upcoming list even though the cycle ends Jun 27; annotating with `[next billing cycle]` lets Claude present this correctly
+
+**Billing cycle math:**
+```
+cycle_start  = preceding_payment_date  (e.g. 2026-05-27)
+cycle_end    = next_payment_date        (e.g. 2026-06-27)
+weeks        = (cycle_end - cycle_start).days / 7
+expected     = floor(weeks × reg_no_of_classes)
+remaining    = expected - act_att
+```
+
+---
+
 ### Session 2026-06-14 — Milestone 3b (camp details)
 
 **Changes made:**
@@ -1628,6 +1662,12 @@ def mock_lineleader_api(monkeypatch):
 | `getClassScheduledetails` | GET | Fetch class time slots | `company_id`, `selected_date`, `class_scheduler_verion=2`, `view_roster_flag=N` |
 | `getClassdatatabledetails` | POST | Student roster for a slot | Form-encoded, DataTables format (23-column headers required) |
 | `verifySession` | GET | Check session validity | None |
+| `getstudent` | POST | Search participants by name | DataTables form-encoded, 12 columns |
+| `getParticipantRegDetails` | GET | Full student profile, rank, membership, sessions | `company_id`, `participant_id`, `student_id`, `mobile_view=N` |
+| `getParticipantRegDetailsByType` | GET | Filtered session list (past/upcoming) | `class_filter_type=P\|U`, `class_filter_date`, `class_filter_days_value`, `show_more_type=A` |
+| `membersRegDetails` | POST | Membership plan details: frequency, billing cycle dates | JSON body: `company_id`, `selected_membership_id` (= reg_id), `franchise_master_id=5`, `franchise_program_id=9` |
+| `removeParticipant` | POST | Cancel a student session | JSON body via v43/Api/PortalApi |
+| `RescheduleCurrentAppointment` | POST | Move a student session | JSON body via Api/v2 |
 
 ### StudentAppointment Fields (from API response)
 
