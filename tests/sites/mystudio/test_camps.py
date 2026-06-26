@@ -19,6 +19,9 @@ from sites.mystudio.camps import (
     get_camps_under_parent,
     format_camps_summary,
     format_camp_roster,
+    _expected_camp_price,
+    format_camp_revenue,
+    format_week_revenue,
 )
 
 
@@ -329,3 +332,178 @@ class TestFormatCampRoster:
         camp = make_camp(enrolled=3, capacity=None)
         result = format_camp_roster(camp, [])
         assert "/ None" not in result
+
+
+# ---------------------------------------------------------------------------
+# _expected_camp_price
+# ---------------------------------------------------------------------------
+
+class TestExpectedCampPrice:
+    def test_full_day_returns_399(self):
+        assert _expected_camp_price("FULL DAY CAMP: Robotics") == 399.00
+
+    def test_all_day_returns_399(self):
+        assert _expected_camp_price("ALL DAY CAMP: Minecraft") == 399.00
+
+    def test_case_insensitive(self):
+        assert _expected_camp_price("Full Day Camp: Lego") == 399.00
+        assert _expected_camp_price("all day camp") == 399.00
+
+    def test_am_camp_returns_249(self):
+        assert _expected_camp_price("AM CAMP: Robotics Engineering") == 249.00
+
+    def test_pm_camp_returns_249(self):
+        assert _expected_camp_price("PM CAMP: Minecraft") == 249.00
+
+    def test_generic_camp_returns_249(self):
+        assert _expected_camp_price("Robotics Engineering (Ages 8+)") == 249.00
+
+    def test_jr_camp_returns_249(self):
+        assert _expected_camp_price("JR CAMP: Game Design") == 249.00
+
+
+# ---------------------------------------------------------------------------
+# Helpers for revenue tests
+# ---------------------------------------------------------------------------
+
+def make_revenue_result(
+    camp=None,
+    total=399.00,
+    enrolled=3,
+    expected_price=399.00,
+    kids=None,
+):
+    if camp is None:
+        camp = make_camp(title="ALL DAY CAMP: Robotics", start="2026-07-07 08:00:00", end="2026-07-07 17:00:00")
+    if kids is None:
+        kids = [
+            {"name": "Alice Smith", "buyer_name": "Bob Smith", "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": None},
+            {"name": "Carlos Diaz", "buyer_name": "Maria Diaz", "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": None},
+            {"name": "Dana Park",  "buyer_name": "Sue Park",   "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": None},
+        ]
+    return {"camp": camp, "total": total, "enrolled": enrolled, "expected_price": expected_price, "kids": kids}
+
+
+# ---------------------------------------------------------------------------
+# format_camp_revenue
+# ---------------------------------------------------------------------------
+
+class TestFormatCampRevenue:
+    def test_error_result_returns_message(self):
+        result = {"error": "Failed to fetch roster", "camp": make_camp()}
+        assert "Could not fetch revenue" in format_camp_revenue(result)
+
+    def test_shows_total_revenue(self):
+        result = make_revenue_result(total=798.00)
+        assert "$798.00" in format_camp_revenue(result)
+
+    def test_shows_enrolled_count(self):
+        result = make_revenue_result(enrolled=3)
+        assert "3 enrolled" in format_camp_revenue(result)
+
+    def test_all_full_price_no_gotcha_sections(self):
+        result = make_revenue_result()
+        text = format_camp_revenue(result)
+        assert "Comped" not in text
+        assert "Discounted" not in text
+        assert "Cancelled" not in text
+        assert "Camp renames" not in text
+
+    def test_comped_kid_flagged(self):
+        kids = [
+            {"name": "Alice Smith", "buyer_name": "Bob Smith", "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": None},
+            {"name": "Dana Park",   "buyer_name": "Sue Park",  "paid_amount": 0.00,   "status": "Active", "cancelled": False, "renamed_from": None},
+        ]
+        result = make_revenue_result(total=399.00, enrolled=2, kids=kids)
+        text = format_camp_revenue(result)
+        assert "Comped" in text
+        assert "Dana Park" in text
+
+    def test_discounted_kid_flagged(self):
+        kids = [
+            {"name": "Alice Smith", "buyer_name": "Bob Smith", "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": None},
+            {"name": "Dana Park",   "buyer_name": "Sue Park",  "paid_amount": 200.00, "status": "Active", "cancelled": False, "renamed_from": None},
+        ]
+        result = make_revenue_result(total=599.00, enrolled=2, kids=kids)
+        text = format_camp_revenue(result)
+        assert "Discounted" in text
+        assert "Dana Park" in text
+        assert "$200.00" in text
+
+    def test_cancelled_kid_listed_separately(self):
+        kids = [
+            {"name": "Alice Smith", "buyer_name": "Bob Smith", "paid_amount": 399.00, "status": "Active",    "cancelled": False, "renamed_from": None},
+            {"name": "Dana Park",   "buyer_name": "Sue Park",  "paid_amount": 0.00,   "status": "cancelled", "cancelled": True,  "renamed_from": None},
+        ]
+        result = make_revenue_result(total=399.00, enrolled=2, kids=kids)
+        text = format_camp_revenue(result)
+        assert "Cancelled" in text
+        assert "Dana Park" in text
+
+    def test_renamed_kid_not_in_comped(self):
+        kids = [
+            {"name": "Jaymin Chiao", "buyer_name": "Parent A", "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": "Robotics Engineering (Ages 8+)"},
+        ]
+        result = make_revenue_result(total=399.00, enrolled=1, kids=kids)
+        text = format_camp_revenue(result)
+        assert "Camp renames" in text
+        assert "Jaymin Chiao" in text
+        assert "Robotics Engineering" in text
+        # Must NOT appear in comped section
+        assert "Comped" not in text
+
+    def test_renamed_kid_flagged_in_enrollment_list(self):
+        kids = [
+            {"name": "Jaymin Chiao", "buyer_name": "Parent A", "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": "Robotics Engineering (Ages 8+)"},
+        ]
+        result = make_revenue_result(total=399.00, enrolled=1, kids=kids)
+        text = format_camp_revenue(result)
+        assert "renamed" in text.lower()
+
+    def test_family_pattern_detected(self):
+        kids = [
+            {"name": "Alice Smith", "buyer_name": "Bob Smith", "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": None},
+            {"name": "Carol Smith", "buyer_name": "Bob Smith", "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": None},
+            {"name": "Dana Park",   "buyer_name": "Sue Park",  "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": None},
+        ]
+        result = make_revenue_result(total=1197.00, enrolled=3, kids=kids)
+        text = format_camp_revenue(result)
+        assert "Families" in text or "family" in text.lower() or "same parent" in text.lower()
+        assert "Bob Smith" in text
+
+    def test_camp_title_in_output(self):
+        camp = make_camp(title="ALL DAY CAMP: Minecraft", start="2026-07-07 08:00:00", end="2026-07-07 17:00:00")
+        result = make_revenue_result(camp=camp)
+        assert "ALL DAY CAMP: Minecraft" in format_camp_revenue(result)
+
+
+# ---------------------------------------------------------------------------
+# format_week_revenue
+# ---------------------------------------------------------------------------
+
+class TestFormatWeekRevenue:
+    def test_shows_week_total(self):
+        r1 = make_revenue_result(total=399.00)
+        r2 = make_revenue_result(total=798.00)
+        text = format_week_revenue([r1, r2])
+        assert "$1,197.00" in text
+
+    def test_error_result_shown(self):
+        camp = make_camp()
+        r1 = make_revenue_result(total=399.00)
+        r2 = {"error": "API failure", "camp": camp}
+        text = format_week_revenue([r1, r2])
+        assert "ERROR" in text
+
+    def test_comped_count_shown(self):
+        kids = [
+            {"name": "Alice", "buyer_name": "Bob", "paid_amount": 399.00, "status": "Active", "cancelled": False, "renamed_from": None},
+            {"name": "Dana",  "buyer_name": "Sue", "paid_amount": 0.00,   "status": "Active", "cancelled": False, "renamed_from": None},
+        ]
+        result = make_revenue_result(total=399.00, enrolled=2, kids=kids)
+        text = format_week_revenue([result])
+        assert "comped" in text.lower()
+
+    def test_zero_results(self):
+        text = format_week_revenue([])
+        assert "$0.00" in text

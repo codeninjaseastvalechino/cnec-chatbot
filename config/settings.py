@@ -72,6 +72,10 @@ class Settings:
     GMAIL_2FA_TIMEOUT_SECONDS: int = int(os.getenv("GMAIL_2FA_TIMEOUT_SECONDS", "120"))
     GMAIL_2FA_POLL_INTERVAL_SECONDS: int = 2
 
+    # ── Camp pricing (used for revenue analysis) ─────────────────────────────
+    CAMP_HALF_DAY_PRICE: float = 249.00   # AM / PM sessions
+    CAMP_FULL_DAY_PRICE: float = 399.00   # Full day / All day sessions
+
     # Browser settings
     BROWSER_HEADLESS: bool = True
     BROWSER_TIMEOUT_MS: int = 30000

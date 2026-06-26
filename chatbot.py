@@ -41,8 +41,11 @@ from sites.mystudio.auth import MystudioOTPRequired, complete_otp_login
 from sites.mystudio.camps import (
     get_all_upcoming_camps,
     get_camp_roster,
+    get_camp_revenue,
     format_camps_summary,
     format_camp_roster,
+    format_camp_revenue,
+    format_week_revenue,
 )
 from format_tours import format_unified_schedule
 from export_tours import create_unified_excel_file
@@ -82,6 +85,7 @@ class ChatbotEngine:
         "cancel_student_session":   "Cancelling session in MyStudio...",
         "move_student_session":     "Rescheduling session in MyStudio...",
         "get_camp_details":         "Fetching camp info from MyStudio...",
+        "get_camp_revenue":         "Calculating camp revenue — fetching payment details per kid...",
     }
 
     @staticmethod
@@ -625,6 +629,38 @@ Be concise and friendly. Staff are busy — get to the point."""
                 },
             },
             handler=self._handle_get_camp_details,
+        )
+
+        self._register(
+            name="get_camp_revenue",
+            description=(
+                "Calculate revenue for upcoming camps — how much has been collected from enrolled families. "
+                "Use when staff ask: 'how much revenue will next week's camp generate?', "
+                "'what did the Minecraft camp bring in?', 'show me camp revenue for July', "
+                "'how much have we collected for summer camps?'. "
+                "Use week_of_date_str to scope by week (e.g. 'next week', 'week of July 6'). "
+                "Use camp_name to filter to a specific camp. "
+                "Returns total revenue, per-camp breakdown, and flags anomalies: "
+                "comped kids ($0), discounts, cancelled registrations, and family patterns."
+            ),
+            parameters={
+                "week_of_date_str": {
+                    "type": "string",
+                    "description": (
+                        "Pass the raw week phrase from the user, e.g. 'next week', 'week of July 6', "
+                        "'this week'. Python resolves to the Mon–Sun window. "
+                        "Leave empty to use all upcoming camps."
+                    ),
+                },
+                "camp_name": {
+                    "type": "string",
+                    "description": (
+                        "Optional camp title keyword to filter, e.g. 'Minecraft', 'Robotics', 'JR'. "
+                        "Leave empty for all camps in the week."
+                    ),
+                },
+            },
+            handler=self._handle_get_camp_revenue,
         )
 
     def _register(self, name: str, description: str, parameters: dict, handler):
@@ -1488,3 +1524,76 @@ Be concise and friendly. Staff are busy — get to the point."""
                 )
 
         return format_camps_summary(filtered)
+
+    def _handle_get_camp_revenue(self, tool_input: dict) -> str:
+        """Calculate revenue for camps in a given week, with per-kid gotcha callouts."""
+        from datetime import datetime, timedelta
+
+        week_of_str = (tool_input.get("week_of_date_str") or "").strip()
+        camp_name_filter = (tool_input.get("camp_name") or "").strip().lower()
+
+        after_date = None
+        week_end = None
+
+        if week_of_str:
+            resolved, err = self._resolve_tool_date(
+                {"date_str": week_of_str}, key="date_str", default="today"
+            )
+            if err:
+                return err
+            monday = resolved - timedelta(days=resolved.weekday())
+            monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+            after_date = monday
+            week_end = monday + timedelta(days=7)
+        else:
+            # Default to next week if no date specified
+            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            days_until_monday = (7 - today.weekday()) % 7 or 7
+            after_date = today + timedelta(days=days_until_monday)
+            week_end = after_date + timedelta(days=7)
+
+        try:
+            camps = get_all_upcoming_camps(from_date=after_date)
+            if week_end:
+                camps = [c for c in camps if c.start_dt < week_end]
+        except MystudioOTPRequired as _otp_exc:
+            self._awaiting_mystudio_otp = True
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
+        except Exception as e:
+            logger.error("get_camp_revenue: failed to fetch camps: %s", e)
+            return "Sorry, I couldn't fetch camp data from MyStudio right now."
+
+        if not camps:
+            return "No upcoming camps found for that week."
+
+        if camp_name_filter:
+            camps = [c for c in camps if camp_name_filter in c.title.lower()]
+            if not camps:
+                return f"No camps matching '{tool_input.get('camp_name')}' found for that week."
+
+        if len(camps) > 8:
+            return (
+                f"Found {len(camps)} camps — that's a lot to compute revenue for individually. "
+                "Try narrowing by camp name or a specific week."
+            )
+
+        results = []
+        for camp in camps:
+            try:
+                result = get_camp_revenue(camp)
+            except MystudioOTPRequired as _otp_exc:
+                self._awaiting_mystudio_otp = True
+                return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
+            except Exception as e:
+                logger.error("get_camp_revenue failed for %s: %s", camp.event_id, e)
+                result = {"error": str(e), "camp": camp}
+            results.append(result)
+
+        if len(results) == 1:
+            return format_camp_revenue(results[0])
+
+        parts = [format_week_revenue(results), ""]
+        for r in results:
+            parts.append(format_camp_revenue(r))
+            parts.append("")
+        return "\n".join(parts)

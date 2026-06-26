@@ -89,7 +89,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ## Current Status
 
-**Last updated: 2026-06-14**
+**Last updated: 2026-06-25**
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
@@ -97,6 +97,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | 2 — MyStudio login + unified schedule + chat/Excel output | ✅ Complete | Direct API + OTP 2FA, 30-day cookie caching |
 | 3 — Student lookup | ✅ Complete | See session notes below |
 | 3b — Camp details | ✅ Complete | Camp list, enrollment counts, kid names + ages, unique kid dedup, week-of-date resolution |
+| 3c — Camp revenue analysis | ✅ Complete | Per-camp revenue via N+1 getParticipantRegDetails; flags comps, discounts, renames, family patterns |
 | 4 — Move / cancel appointments (single session) | ✅ Complete | Recurring all-future ops have gaps — see Known Issues |
 | 4 — Move / cancel appointments (all-future recurring) | ⚠️ Partial | API returns Success but does not cascade — under investigation |
 | 4 — Book new appointment | ⬜ Not started | Blocked: requires student-session token not yet solved |
@@ -134,7 +135,8 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | Excel export of any schedule | Live | "Download today's schedule as Excel", "Export Friday's tours" |
 | Cancel / move all-future recurring sessions | Partial — API gap | Returns success but only affects the targeted occurrence; root cause under investigation |
 | Book a new appointment | Blocked | Requires POS-flow student token not obtainable via staff login |
-| Camp enrollment details | Coming (M3b) | Needs API discovery session first |
+| Camp enrollment details + roster | Live | "Show me next week's camps", "Who's in the Minecraft camp?" |
+| Camp revenue analysis | Live | "How much revenue will next week's camp generate?", "What did the Robotics camp bring in?" |
 | Employee schedule (Homebase) | Coming (M6) | Homebase integration not yet started |
 | Quick-query shortcuts bypassing Claude | Coming | Sidebar buttons currently still go through Claude; true bypass planned |
 
@@ -143,6 +145,45 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 - Keep the feature list in the panel driven from a data structure, not hardcoded strings, so it stays in sync as milestones complete
 - "Partial" and "blocked" items: show to staff (they manage expectations); consider hiding from any future customer-facing view
 - No new Python modules needed — this is purely a frontend/template change to `app.py`
+
+---
+
+### Session 2026-06-25 — Milestone 3c (camp revenue analysis)
+
+**Changes made:**
+- ✅ **`config/settings.py`** — added `CAMP_HALF_DAY_PRICE = 249.00` and `CAMP_FULL_DAY_PRICE = 399.00`
+- ✅ **`sites/mystudio/camps.py`** — new revenue functions:
+  - `_expected_camp_price(title)` — infers standard price from title: "FULL DAY"/"ALL DAY" → $399, otherwise → $249
+  - `_get_roster_raw_rows(event_id, parent_id)` — same 36-column getFilterDetails call as `get_camp_roster`, but returns raw row dicts (needed to check for `participant_id`/`student_id` fields)
+  - `get_camp_revenue(camp)` — N+1 pattern: roster rows → per-kid `getParticipantRegDetails` → finds `event_details` entry matching `event_id` with `payment_status_label == "Active"` → sums `paid_amount`. Detects: comped ($0), discounted (< standard), cancelled (excluded), family patterns (same buyer, multiple kids), camp renames (same date, different event_id). Returns structured dict with `total`, `enrolled`, `expected_price`, `kids`.
+  - `format_camp_revenue(result)` — formats single camp with total, gotcha sections (renames, comps, discounts, cancellations, families), and full per-kid enrollment list with flags
+  - `format_week_revenue(results)` — one-line-per-camp summary across a week
+- ✅ **`chatbot.py`** — `get_camp_revenue` tool:
+  - Loading message: `"Calculating camp revenue — fetching payment details per kid..."`
+  - Parameters: `week_of_date_str` (raw week phrase), `camp_name` (keyword filter)
+  - Default: if no week given, uses next calendar week
+  - Cap: refuses to compute >8 camps at once (asks user to narrow)
+  - Handler: `_handle_get_camp_revenue()`
+- ✅ **`tests/sites/mystudio/test_camps.py`** — tests for `_expected_camp_price`, `format_camp_revenue`, `format_week_revenue`, rename detection
+
+**Key discoveries:**
+- `getFilterDetails` roster rows do NOT include `participant_id`/`student_id` in the 36-column format — fall back to `find_student_by_name` + buyer name match for ID resolution
+- `participant_id` is the correct unique key per child (siblings share `student_id`)
+- `payment_status_label == "Active"` filter is required — cancelled entries still carry a `paid_amount` value
+- Camp rename scenario: parent paid $399 in April for "Robotics Engineering (Ages 8+)", camp renamed in May to "ALL DAY CAMP: Robotics Engineering + Cybersecurity Coding". Kid migrated to new `event_id` at $0; real payment lives on old `event_id`. Fix: when exact `event_id` shows $0 + Active, look for another Active entry on the **same start_date** with `paid_amount > 0` → use that amount and flag as `renamed_from`.
+- `start_date` format in `event_details` is "Jun 22, 2026" (matches `camp.start_dt.strftime("%b %-d, %Y")`)
+
+**Revenue gotcha callout logic (in order):**
+1. **Camp renames** — $0 on current event_id but matching same-date paid entry found → revenue recovered, callout shows original event title
+2. **Comped ($0)** — Active entry with $0 and no rename found → flagged with parent name
+3. **Discounted** — Active entry with 0 < paid < expected → flagged with actual vs standard price
+4. **Cancelled** — entry with `payment_status_label == "Cancelled"` → excluded from total, listed separately
+5. **Family pattern** — same `buyer_name` appears for 2+ enrolled kids → grouped with amounts
+
+**Pricing logic:**
+- Title contains "FULL DAY" or "ALL DAY" → $399 (`CAMP_FULL_DAY_PRICE`)
+- Anything else (AM CAMP, PM CAMP, half-day) → $249 (`CAMP_HALF_DAY_PRICE`)
+- Both JR and regular camps follow the same pricing
 
 ---
 
