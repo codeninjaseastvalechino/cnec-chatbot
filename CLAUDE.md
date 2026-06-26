@@ -1110,6 +1110,78 @@ For complete examples, see [How to Run](#how-to-run) → [Milestone 5: Web Chat 
 
 ## Safety & Design
 
+### Security Architecture (Planned — Not Yet Implemented)
+
+**Current state:** The app has no authentication layer. Anyone who can reach the URL can query any student, move sessions, or view revenue. This is acceptable for local-only use but must be addressed before broader access is granted.
+
+**Planned security model — two layers:**
+
+#### Layer 1 — IP Allowlist (Network-Level Gate)
+
+Restrict access to known-good IPs by default. Implemented as Flask middleware that checks `request.remote_addr` (or `X-Forwarded-For` on Railway) on every request.
+
+| IP Source | Access |
+|-----------|--------|
+| Center network (static IP of the Code Ninjas location) | ✅ Full access |
+| Owner home IP(s) | ✅ Full access |
+| Owner mobile (dynamic) | Via bypass token (see below) |
+| Any other IP | ❌ 403 — blocked |
+
+**Owner bypass:** A long-lived secret token in `.env` (`OWNER_BYPASS_TOKEN`). Owner appends `?token=<secret>` to the URL or sets it as a cookie — middleware grants full access for that session regardless of IP. Token never expires unless rotated manually.
+
+**Implementation notes:**
+- Center IP: add to `.env` as `ALLOWED_IPS=x.x.x.x,y.y.y.y` (comma-separated, supports multiple for redundancy)
+- On Railway: `X-Forwarded-For` header carries the real client IP — use `ProxyFix` from Werkzeug (`from werkzeug.middleware.proxy_fix import ProxyFix; app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)`) and read `request.remote_addr` after that
+- Bypass token check runs before IP check so owner isn't locked out if their IP changes
+
+#### Layer 2 — Role-Based Access (Feature-Level Gate)
+
+Two roles. Role is determined after Layer 1 passes.
+
+| Role | How to authenticate | Access |
+|------|---------------------|--------|
+| **Sensei** | Homebase PIN (4-digit, entered in chat UI) — validated against Homebase API when Homebase is connected; until then, a shared `SENSEI_PIN` in `.env` | Student lookup, session scheduling, schedule view, roster |
+| **Owner** | Separate owner password (`OWNER_PASSWORD` in `.env`, already exists) | Everything Sensei can do + revenue analysis + employee schedules (Homebase) |
+
+**Owner-only features (require Owner role, never shown to Sensei):**
+- `get_camp_revenue` tool — camp revenue analysis
+- Employee schedule generation (Milestone 6, when built)
+- Any future financial reporting tools
+
+**Sensei authentication flow (once Homebase is connected):**
+- On first use in a session, UI prompts for 4-digit PIN
+- PIN sent to server → validated against Homebase employee record
+- If valid, session marked `role=sensei` (Flask session cookie, server-side signed)
+- PIN not stored — re-validated on session expiry or after configurable timeout
+
+**Implementation notes:**
+- Flask `session` with `SECRET_KEY` (add to `.env`) for signed cookies — role stored as `session["role"] = "owner"` or `"sensei"`
+- `@require_role("owner")` decorator on tool handlers that need it — returns a clean "This feature requires owner access" message if role insufficient, not a 403
+- Revenue and financial tools: block at the chatbot tool-execution layer (not just UI) — even if someone crafts a direct API call, the tool checks `session["role"]`
+- `ADMIN_PASSWORD` already exists in `settings.py` and `app.py` — Owner login should reuse this rather than adding a new variable
+
+**What Sensei cannot see even if they ask Claude:**
+- Camp revenue numbers
+- Aggregate payment totals
+- Employee wages / hours (when Homebase is added)
+- The owner bypass token
+
+#### Homebase PIN integration (future)
+
+When Homebase is connected (Milestone 6), replace the static `SENSEI_PIN` with live PIN validation:
+- `POST /api/employees/authenticate` with the entered PIN → Homebase returns employee record or 401
+- Store `session["employee_id"]` and `session["role"] = "sensei"` on success
+- Enables future per-employee audit logging (who moved which session)
+
+#### Rollout order
+
+1. IP allowlist first — zero UI changes, pure middleware, blocks outsiders immediately
+2. Owner password gate on revenue tools — reuses existing `ADMIN_PASSWORD` flow
+3. Sensei PIN (static) — when sensei needs access from outside the center network
+4. Sensei PIN (Homebase) — once Homebase integration lands
+
+---
+
 ### Safety Rules (Non-Negotiable)
 
 From requirements §8:
@@ -1857,9 +1929,21 @@ Child names are NOT returned in the action-items response. Two-step lookup requi
 
 ## Users & Permissions
 
-| Role | Access |
-|------|--------|
-| Owner + Wife | All tasks including employee schedule (Milestone 6) |
-| Staff (1 person) | Tasks 1–5 only — employee schedule completely hidden |
+| Role | Who | Access |
+|------|-----|--------|
+| **Owner** | Owner + Wife | Everything: student ops, revenue analysis, employee schedule (M6), all financial tools |
+| **Sensei** | Staff (1 person currently) | Student lookup, session scheduling, schedule view, roster — no revenue, no financials |
 
-Owner identity enforced at session start via PIN or separate launch mode.
+**Feature visibility by role:**
+
+| Feature | Sensei | Owner |
+|---------|--------|-------|
+| Full schedule / GBS tours | ✅ | ✅ |
+| Student lookup + session ops | ✅ | ✅ |
+| Cancel / move sessions | ✅ | ✅ |
+| Camp enrollment / roster | ✅ | ✅ |
+| Camp revenue analysis | ❌ hidden | ✅ |
+| Employee schedule (M6) | ❌ hidden | ✅ |
+| Any financial reporting | ❌ hidden | ✅ |
+
+See **Security Architecture** section under Safety & Design for the planned implementation (IP allowlist + role-based session gates).
