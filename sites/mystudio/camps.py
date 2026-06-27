@@ -78,6 +78,43 @@ class CampKid:
     age: Optional[str] = ""  # p_age from API, e.g. "8"
 
 
+def _parse_child_events(
+    children: List[Dict[str, Any]],
+    parent_id: str,
+    parent_title: str,
+) -> List[CampRecord]:
+    """Parse raw child event dicts into CampRecord objects (shared by live and past paths)."""
+    camps = []
+    for item in children:
+        begin_str = item.get("event_begin_dt", _NULL_DATE)
+        end_str = item.get("event_end_dt", _NULL_DATE)
+        if begin_str == _NULL_DATE or not begin_str:
+            continue
+        try:
+            start_dt = datetime.strptime(begin_str, "%Y-%m-%d %H:%M:%S")
+            end_dt = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            logger.warning("Could not parse dates for camp %s: %s / %s",
+                           item.get("event_id"), begin_str, end_str)
+            continue
+        enrolled = int(item.get("registrations_count") or 0)
+        raw_cap = item.get("event_capacity")
+        capacity = int(raw_cap) if raw_cap is not None else None
+        camps.append(CampRecord(
+            event_id=str(item.get("event_id", "")),
+            parent_id=parent_id,
+            parent_title=parent_title,
+            title=item.get("event_title", ""),
+            start_dt=start_dt,
+            end_dt=end_dt,
+            enrolled=enrolled,
+            capacity=capacity,
+            event_show_status=item.get("event_show_status", "N"),
+            event_url=item.get("event_url", ""),
+        ))
+    return camps
+
+
 def get_live_parent_events() -> List[Dict[str, Any]]:
     """
     Fetch top-level live camp groups (parent_id empty = top-level).
@@ -107,7 +144,6 @@ def get_live_parent_events() -> List[Dict[str, Any]]:
         return []
 
     msg = data.get("msg", {})
-    # Top-level returns {"past": [], "draft": [], "live": [...]}
     live = msg.get("live", []) if isinstance(msg, dict) else []
     logger.info("Found %d live parent camp groups", len(live))
     return live
@@ -115,11 +151,9 @@ def get_live_parent_events() -> List[Dict[str, Any]]:
 
 def get_camps_under_parent(parent_event_id: str, parent_title: str) -> List[CampRecord]:
     """
-    Fetch all child camp sessions under a given parent event ID.
+    Fetch all child camp sessions under a given parent event ID (live/upcoming).
 
-    Only returns camps that are actually scheduled:
-      - event_show_status == "Y" OR has real enrollment (registrations_count > 0)
-      - event_begin_dt is not a null date
+    Only returns camps that are actually scheduled (non-null event_begin_dt).
     """
     session = get_session()
     resp = session.get(f"{BASE_URL}/geteventdetails", params={
@@ -143,44 +177,10 @@ def get_camps_under_parent(parent_event_id: str, parent_title: str) -> List[Camp
         return []
 
     raw_camps = data.get("msg", [])
-    # Child level returns a plain list (not the live/past/draft dict)
     if isinstance(raw_camps, dict):
         raw_camps = raw_camps.get("live", [])
 
-    camps = []
-    for item in raw_camps:
-        begin_str = item.get("event_begin_dt", _NULL_DATE)
-        end_str = item.get("event_end_dt", _NULL_DATE)
-
-        # Skip template/placeholder camps with no real date
-        if begin_str == _NULL_DATE or not begin_str:
-            continue
-
-        try:
-            start_dt = datetime.strptime(begin_str, "%Y-%m-%d %H:%M:%S")
-            end_dt = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            logger.warning("Could not parse dates for camp %s: %s / %s",
-                           item.get("event_id"), begin_str, end_str)
-            continue
-
-        enrolled = int(item.get("registrations_count") or 0)
-        raw_cap = item.get("event_capacity")
-        capacity = int(raw_cap) if raw_cap is not None else None
-
-        camps.append(CampRecord(
-            event_id=str(item.get("event_id", "")),
-            parent_id=parent_event_id,
-            parent_title=parent_title,
-            title=item.get("event_title", ""),
-            start_dt=start_dt,
-            end_dt=end_dt,
-            enrolled=enrolled,
-            capacity=capacity,
-            event_show_status=item.get("event_show_status", "N"),
-            event_url=item.get("event_url", ""),
-        ))
-
+    camps = _parse_child_events(raw_camps, parent_event_id, parent_title)
     logger.info("Parsed %d scheduled camps under parent %s", len(camps), parent_event_id)
     return camps
 
@@ -219,18 +219,79 @@ def get_all_upcoming_camps(from_date: Optional[datetime] = None) -> List[CampRec
     return upcoming
 
 
-def get_camp_roster(event_id: str, parent_id: str = "") -> Optional[List[CampKid]]:
+def get_all_past_camps(since_date: Optional[datetime] = None, until_date: Optional[datetime] = None) -> List[CampRecord]:
+    """
+    Fetch past camps using list_type=D (done/past events).
+
+    Uses the top-level geteventdetails?list_type=D call which returns past parent groups
+    with child_events already embedded — no second API call needed per parent.
+
+    since_date: only return camps starting on or after this date (default: beginning of year)
+    until_date: only return camps starting before this date (default: today)
+
+    Returns list sorted by start_dt descending (most recent first).
+    """
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    if until_date is None:
+        until_date = today
+    if since_date is None:
+        since_date = today.replace(month=1, day=1)
+
+    session = get_session()
+    resp = session.get(f"{BASE_URL}/geteventdetails", params={
+        "company_id": COMPANY_ID,
+        "franchise_master_id": "5",
+        "franchise_program_id": "9",
+        "from": "W",
+        "limit": "20",
+        "list_type": "D",
+        "parent_id": "",
+    }, timeout=30)
+
+    if resp.status_code == 401:
+        clear_cached_cookies()
+        raise MystudioOTPRequired("MyStudio session expired.")
+    resp.raise_for_status()
+
+    data = resp.json()
+    if data.get("status") != "Success":
+        logger.warning("geteventdetails (past) returned: %s", data.get("status"))
+        return []
+
+    msg = data.get("msg", {})
+    past_parents = msg.get("past", []) if isinstance(msg, dict) else []
+
+    all_camps: List[CampRecord] = []
+    for parent in past_parents:
+        # Only process camp group parents (event_type="M"), not standalone events
+        if parent.get("event_type") != "M":
+            continue
+        parent_id = str(parent.get("event_id", ""))
+        parent_title = parent.get("event_title", "Unknown")
+        children = parent.get("child_events", [])
+        camps = _parse_child_events(children, parent_id, parent_title)
+        all_camps.extend(camps)
+
+    past = [c for c in all_camps if since_date <= c.start_dt < until_date]
+    past.sort(key=lambda c: c.start_dt, reverse=True)
+    logger.info("Found %d past camps (%s → %s)", len(past),
+                since_date.strftime("%Y-%m-%d"), until_date.strftime("%Y-%m-%d"))
+    return past
+
+
+def get_camp_roster(event_id: str, parent_id: str = "", event_list_type: str = "P") -> Optional[List[CampKid]]:
     """
     Fetch enrolled kids for a specific camp (child event_id).
 
     Uses getFilterDetails with the exact column/filter format captured from the browser.
     parent_id should be the parent event group ID (e.g. "292536") — required for filtering.
+    event_list_type: "P" for upcoming/live camps, "D" for past (done) camps.
     Returns list of CampKid sorted by participant_name, or None on failure.
     """
     session = get_session()
 
     filter_options = json.dumps({
-        "event_list": {"event_list_type": "P"},
+        "event_list": {"event_list_type": event_list_type},
         "all_event": {"all_event_id": [parent_id] if parent_id else []},
         "child_event": {"child_event_type": "S", "child_event_id": [event_id]},
         "status": {"status_type": "O"},
@@ -328,12 +389,15 @@ def _expected_camp_price(title: str) -> float:
     return settings.CAMP_HALF_DAY_PRICE
 
 
-def _get_roster_raw_rows(event_id: str, parent_id: str = "") -> Optional[List[Dict[str, Any]]]:
-    """Return raw getFilterDetails rows for a camp (all fields, not just CampKid subset)."""
+def _get_roster_raw_rows(event_id: str, parent_id: str = "", event_list_type: str = "P") -> Optional[List[Dict[str, Any]]]:
+    """Return raw getFilterDetails rows for a camp (all fields, not just CampKid subset).
+
+    event_list_type: "P" for upcoming/live camps, "D" for past (done) camps.
+    """
     session = get_session()
 
     filter_options = json.dumps({
-        "event_list": {"event_list_type": "P"},
+        "event_list": {"event_list_type": event_list_type},
         "all_event": {"all_event_id": [parent_id] if parent_id else []},
         "child_event": {"child_event_type": "S", "child_event_id": [event_id]},
         "status": {"status_type": "O"},
@@ -409,7 +473,9 @@ def get_camp_revenue(camp: CampRecord) -> Dict[str, Any]:
 
     expected = _expected_camp_price(camp.title)
 
-    rows = _get_roster_raw_rows(camp.event_id, camp.parent_id)
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    list_type = "D" if camp.start_dt < today else "P"
+    rows = _get_roster_raw_rows(camp.event_id, camp.parent_id, event_list_type=list_type)
     if rows is None:
         return {"error": "Failed to fetch roster", "camp": camp, "expected_price": expected}
 

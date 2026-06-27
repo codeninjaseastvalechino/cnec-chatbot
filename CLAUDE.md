@@ -20,6 +20,13 @@ Full requirements: `CNEC-Chatbot-Requirements.md`
 
 ---
 
+## ⚠️ Git Rules (Non-Negotiable)
+
+**Never run `git commit` or `git push` unless the user explicitly says "commit" or "push" in that message.**
+Editing files or discussing changes does not imply permission to commit or push.
+
+---
+
 ## ⚠️ Python 3.9 Constraint (Critical)
 
 **The user is on Python 3.9.** Do NOT use new type hint syntax:
@@ -89,15 +96,15 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ## Current Status
 
-**Last updated: 2026-06-25**
+**Last updated: 2026-06-26**
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
 | 1 — LineLeader login + GBS/JR GBS tour pull + reschedule | ✅ Complete | Production-ready CLI tool |
 | 2 — MyStudio login + unified schedule + chat/Excel output | ✅ Complete | Direct API + OTP 2FA, 30-day cookie caching |
 | 3 — Student lookup | ✅ Complete | See session notes below |
-| 3b — Camp details | ✅ Complete | Camp list, enrollment counts, kid names + ages, unique kid dedup, week-of-date resolution |
-| 3c — Camp revenue analysis | ✅ Complete | Per-camp revenue via N+1 getParticipantRegDetails; flags comps, discounts, renames, family patterns |
+| 3b — Camp details | ✅ Complete | Camp list, enrollment counts, kid names + ages, unique kid dedup, week-of-date resolution; past camp support via list_type=D |
+| 3c — Camp revenue analysis | ✅ Complete | Per-camp revenue via N+1 getParticipantRegDetails; flags comps, discounts, renames, family patterns; auto-detects past vs live for correct roster |
 | 4 — Move / cancel appointments (single session) | ✅ Complete | Recurring all-future ops have gaps — see Known Issues |
 | 4 — Move / cancel appointments (all-future recurring) | ⚠️ Partial | API returns Success but does not cascade — under investigation |
 | 4 — Book new appointment | ⬜ Not started | Blocked: requires student-session token not yet solved |
@@ -147,6 +154,34 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 - No new Python modules needed — this is purely a frontend/template change to `app.py`
 
 ---
+
+### Session 2026-06-26 — Past camp support + fuzzy name search
+
+**Changes made:**
+- ✅ **`sites/mystudio/camps.py`** — past camp infrastructure:
+  - `_parse_child_events(children, parent_id, parent_title)` — extracted shared parsing logic used by both live and past paths
+  - `get_camps_under_parent()` — refactored to delegate to `_parse_child_events` (no behavior change for upcoming camps)
+  - `get_all_past_camps()` — fixed to use `list_type=D` (was incorrectly using `list_type=P`). Reads `msg["past"]` array, parses `child_events` already embedded per parent — no second API call needed per parent
+  - `get_camp_roster(event_id, parent_id, event_list_type="P")` — added `event_list_type` param; pass `"D"` for past camps
+  - `_get_roster_raw_rows(event_id, parent_id, event_list_type="P")` — same param added
+  - `get_camp_revenue()` — auto-detects past vs live by comparing `camp.start_dt < today`, passes correct `event_list_type` to `_get_roster_raw_rows`
+- ✅ **`chatbot.py`** — camp name search improvements:
+  - `_camp_matches(query, title)` — fuzzy matching: exact substring → all words → any meaningful word (≥4 chars). Handles typos like "artemiss" matching "artemis"
+  - When `camp_name` given but no date: always searches both upcoming AND past camps, merges results (past → upcoming chronologically)
+  - Multi-camp roster fetch: uses per-camp `event_list_type` (past camps get `"D"`, future get `"P"`) instead of a single flag — required because a name search can return a mix
+  - Search scope footer appended to result: `[Searched all camps: Jan 1 {year} through end of season. This is the complete list.]` — prevents Claude from claiming it can't access historical data
+  - Tool description updated: explicitly states it searches both upcoming and past, warns Claude never to answer from context alone for camp queries
+- ✅ **`tests/sites/mystudio/test_camps.py`** — 16 new tests (69 total):
+  - `TestParseChildEvents` — 7 tests: valid parse, null/empty/bad dates, None capacity, multiple children
+  - `TestGetAllPastCamps` — 6 tests: child camps returned, standalone events skipped, sorted desc, since_date filter, empty response, parent_id/title propagated
+  - `TestGetCampRosterListType` — 3 tests: default "P", explicit "D" sent in filter_options, kids returned
+
+**Key discoveries:**
+- `list_type=D` returns `msg["past"]` — a list of parent groups with `child_events` already embedded. No second API call needed per parent (unlike `list_type=P`)
+- `list_type=D` response: parents have `event_type="M"` (multi/group) or `"S"` (standalone event like open house). Only `"M"` parents are camp groups — standalone events must be skipped
+- `getFilterDetails` (roster API) requires `event_list_type="D"` in `filter_options` for past camps; using `"P"` returns 0 results even when the camp has enrolled kids
+- Past camp roster: `event_list_type` must match the camp's lifecycle state — hence per-camp detection in multi-roster fetch
+- Claude will answer from conversation context rather than re-calling tools if it thinks it already has the answer. Fix: embed a "searched all camps" marker in tool results so Claude knows the scope of what was fetched
 
 ### Session 2026-06-25 — Milestone 3c (camp revenue analysis)
 

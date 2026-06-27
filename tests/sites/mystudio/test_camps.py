@@ -16,7 +16,10 @@ import pytest
 from sites.mystudio.camps import (
     CampRecord,
     CampKid,
+    _parse_child_events,
     get_camps_under_parent,
+    get_all_past_camps,
+    get_camp_roster,
     format_camps_summary,
     format_camp_roster,
     _expected_camp_price,
@@ -237,6 +240,198 @@ class TestGetCampsUnderParent:
         camps = get_camps_under_parent("100", "Summer 2026")
         ids = [c.event_id for c in camps]
         assert "9999" not in ids
+
+
+# ---------------------------------------------------------------------------
+# _parse_child_events — shared parsing helper
+# ---------------------------------------------------------------------------
+
+class TestParseChildEvents:
+    def test_parses_valid_child(self):
+        camps = _parse_child_events([REAL_CAMP], "100", "Summer 2026")
+        assert len(camps) == 1
+        assert camps[0].event_id == "1001"
+        assert camps[0].parent_id == "100"
+        assert camps[0].parent_title == "Summer 2026"
+        assert camps[0].enrolled == 3
+
+    def test_skips_null_date(self):
+        camps = _parse_child_events([TEMPLATE_CAMP], "100", "Summer 2026")
+        assert camps == []
+
+    def test_skips_empty_date(self):
+        camps = _parse_child_events([MISSING_DATE], "100", "Summer 2026")
+        assert camps == []
+
+    def test_skips_bad_date_format(self):
+        bad = {**REAL_CAMP, "event_begin_dt": "not-a-date", "event_id": "9999"}
+        camps = _parse_child_events([REAL_CAMP, bad], "100", "Summer 2026")
+        assert len(camps) == 1
+        assert camps[0].event_id == "1001"
+
+    def test_none_capacity_is_none(self):
+        item = {**REAL_CAMP, "event_capacity": None}
+        camps = _parse_child_events([item], "100", "Summer 2026")
+        assert camps[0].capacity is None
+
+    def test_multiple_children_all_parsed(self):
+        second = {**REAL_CAMP, "event_id": "1005", "event_begin_dt": "2026-06-16 08:30:00",
+                  "event_end_dt": "2026-06-16 11:30:00"}
+        camps = _parse_child_events([REAL_CAMP, second], "100", "Summer 2026")
+        assert len(camps) == 2
+        assert {c.event_id for c in camps} == {"1001", "1005"}
+
+    def test_get_camps_under_parent_delegates_to_parse_child_events(self, mock_get_session=None):
+        # Verify get_camps_under_parent produces same results as calling _parse_child_events directly
+        camps_direct = _parse_child_events([REAL_CAMP], "100", "Summer 2026")
+        assert camps_direct[0].enrolled == 3
+        assert camps_direct[0].title == "AM CAMP: LEGO Robotics Ages 8+"
+
+
+# ---------------------------------------------------------------------------
+# get_all_past_camps — list_type=D path
+# ---------------------------------------------------------------------------
+
+def _mock_past_api_response(past_parents: list) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "status": "Success",
+        "msg": {"past": past_parents, "draft": [], "live": []},
+    }
+    return resp
+
+
+PAST_PARENT_WITH_CHILDREN = {
+    "event_id": "292536",
+    "event_title": "2026 Summer and Off-Track Camps",
+    "event_type": "M",
+    "child_events": [
+        {
+            "event_id": "5001",
+            "event_title": "3D Printing Camp",
+            "event_begin_dt": "2026-02-09 09:00:00",
+            "event_end_dt": "2026-02-09 15:00:00",
+            "registrations_count": "10",
+            "event_capacity": "12",
+            "event_show_status": "Y",
+            "event_url": "",
+        },
+        {
+            "event_id": "5002",
+            "event_title": "AM CAMP: LEGO Robotics",
+            "event_begin_dt": "2026-03-15 08:30:00",
+            "event_end_dt": "2026-03-15 11:30:00",
+            "registrations_count": "5",
+            "event_capacity": "10",
+            "event_show_status": "Y",
+            "event_url": "",
+        },
+    ],
+}
+
+PAST_STANDALONE_EVENT = {
+    "event_id": "9001",
+    "event_title": "Open House",
+    "event_type": "S",  # standalone, not a camp group — should be skipped
+    "child_events": [],
+}
+
+
+@patch("sites.mystudio.camps.get_session")
+class TestGetAllPastCamps:
+    def test_returns_child_camps_from_past_parents(self, mock_get_session):
+        mock_get_session.return_value.get.return_value = _mock_past_api_response(
+            [PAST_PARENT_WITH_CHILDREN]
+        )
+        camps = get_all_past_camps()
+        assert len(camps) == 2
+        ids = {c.event_id for c in camps}
+        assert "5001" in ids
+        assert "5002" in ids
+
+    def test_skips_standalone_events(self, mock_get_session):
+        mock_get_session.return_value.get.return_value = _mock_past_api_response(
+            [PAST_PARENT_WITH_CHILDREN, PAST_STANDALONE_EVENT]
+        )
+        camps = get_all_past_camps()
+        assert all(c.event_id != "9001" for c in camps)
+
+    def test_sorted_most_recent_first(self, mock_get_session):
+        mock_get_session.return_value.get.return_value = _mock_past_api_response(
+            [PAST_PARENT_WITH_CHILDREN]
+        )
+        camps = get_all_past_camps()
+        dates = [c.start_dt for c in camps]
+        assert dates == sorted(dates, reverse=True)
+
+    def test_since_date_filter(self, mock_get_session):
+        mock_get_session.return_value.get.return_value = _mock_past_api_response(
+            [PAST_PARENT_WITH_CHILDREN]
+        )
+        since = datetime(2026, 3, 1)
+        until = datetime(2026, 12, 31)
+        camps = get_all_past_camps(since_date=since, until_date=until)
+        # Only the March camp passes the filter
+        assert len(camps) == 1
+        assert camps[0].event_id == "5002"
+
+    def test_empty_past_returns_empty_list(self, mock_get_session):
+        mock_get_session.return_value.get.return_value = _mock_past_api_response([])
+        camps = get_all_past_camps()
+        assert camps == []
+
+    def test_parent_id_and_title_propagated(self, mock_get_session):
+        mock_get_session.return_value.get.return_value = _mock_past_api_response(
+            [PAST_PARENT_WITH_CHILDREN]
+        )
+        camps = get_all_past_camps()
+        for c in camps:
+            assert c.parent_id == "292536"
+            assert c.parent_title == "2026 Summer and Off-Track Camps"
+
+
+# ---------------------------------------------------------------------------
+# get_camp_roster — event_list_type parameter
+# ---------------------------------------------------------------------------
+
+@patch("sites.mystudio.camps.get_session")
+class TestGetCampRosterListType:
+    def _make_roster_response(self, kids: list) -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"status": "Success", "data": kids}
+        return resp
+
+    def test_default_list_type_is_P(self, mock_get_session):
+        mock_get_session.return_value.post.return_value = self._make_roster_response([])
+        get_camp_roster("5001", "292536")
+        call_kwargs = mock_get_session.return_value.post.call_args
+        posted_data = call_kwargs[1].get("data", call_kwargs[0][1] if len(call_kwargs[0]) > 1 else {})
+        import json
+        filter_opts = json.loads(posted_data.get("filter_options", "{}"))
+        assert filter_opts["event_list"]["event_list_type"] == "P"
+
+    def test_past_list_type_is_D(self, mock_get_session):
+        mock_get_session.return_value.post.return_value = self._make_roster_response([])
+        get_camp_roster("5001", "292536", event_list_type="D")
+        call_kwargs = mock_get_session.return_value.post.call_args
+        posted_data = call_kwargs[1].get("data", call_kwargs[0][1] if len(call_kwargs[0]) > 1 else {})
+        import json
+        filter_opts = json.loads(posted_data.get("filter_options", "{}"))
+        assert filter_opts["event_list"]["event_list_type"] == "D"
+
+    def test_returns_kids_from_response(self, mock_get_session):
+        kid_row = {
+            "participant_name": "Alex Smith", "buyer_name": "Bob Smith",
+            "participant_phone": "5551234", "participant_email": "bob@test.com",
+            "event_reg_status": "Active", "event_title": "3D Printing Camp", "p_age": "9",
+        }
+        mock_get_session.return_value.post.return_value = self._make_roster_response([kid_row])
+        kids = get_camp_roster("5001", "292536", event_list_type="D")
+        assert kids is not None
+        assert len(kids) == 1
+        assert kids[0].participant_name == "Alex Smith"
 
 
 # ---------------------------------------------------------------------------

@@ -110,8 +110,9 @@ Bot:  📅 Wednesday, June 3, 2026
 - ✅ Multi-turn conversation — ask follow-ups naturally
 - ✅ Accessible from any machine on the same WiFi
 - ✅ Query analytics — tracks what's asked most to improve the UI over time
-- ✅ Summer camp details — list camps by week, enrollment counts, spots left
-- ✅ Camp roster — who's enrolled in each camp, kid names and ages
+- ✅ Summer camp details — list camps by week, enrollment counts, spots left (upcoming and past)
+- ✅ Camp roster — who's enrolled in each camp, kid names and ages (past and upcoming)
+- ✅ Camp name search — find any camp by keyword across all past and upcoming camps; fuzzy matching handles typos
 - ✅ "Week of July 17th" style queries — resolves any date to the correct Mon–Fri week
 
 ### Authentication

@@ -40,6 +40,7 @@ from sites.mystudio.schedules import get_todays_appointments
 from sites.mystudio.auth import MystudioOTPRequired, complete_otp_login
 from sites.mystudio.camps import (
     get_all_upcoming_camps,
+    get_all_past_camps,
     get_camp_roster,
     get_camp_revenue,
     format_camps_summary,
@@ -584,11 +585,15 @@ Be concise and friendly. Staff are busy — get to the point."""
         self._register(
             name="get_camp_details",
             description=(
-                "Fetch upcoming camp details from MyStudio. "
+                "Fetch camp details from MyStudio — both upcoming AND past camps. "
                 "Returns camp names, dates, enrollment counts, and optionally the roster of enrolled kids. "
                 "Use when staff ask about camps — e.g. 'what camps are coming up?', "
                 "'how many kids are in the Minecraft camp?', 'who's enrolled in the June 15 camp?', "
-                "'show me the summer camp schedule', 'list all camps this week'. "
+                "'show me the summer camp schedule', 'list all camps this week', "
+                "'find past 3D printing camps', 'what camps ran in February?'. "
+                "When camp_name is given without a date, this tool automatically searches both "
+                "upcoming and past camps and returns all matches — always call this tool for camp name searches, "
+                "never answer from context alone. "
                 "Pass camp_name to filter by a specific camp title (fuzzy match). "
                 "Use week_of_date_str when user says 'week of X' or 'that week' — finds all camps in the Mon–Fri week containing that date. "
                 "Use after_date_str for open-ended 'after X' or 'from X' filters. "
@@ -1453,9 +1458,10 @@ Be concise and friendly. Staff are busy — get to the point."""
         after_date_str = (tool_input.get("after_date_str") or "").strip()
 
         if week_of_str:
-            # Find Monday of the week containing the given date
+            # Find Monday of the week containing the given date.
+            # allow_past=True so "June 19" resolves to 2026-06-19, not 2027-06-19.
             resolved, err = self._resolve_tool_date(
-                {"date_str": week_of_str}, key="date_str", default="today"
+                {"date_str": week_of_str}, key="date_str", default="today", allow_past=True
             )
             if err:
                 return err
@@ -1465,7 +1471,7 @@ Be concise and friendly. Staff are busy — get to the point."""
             week_end = monday + timedelta(days=7)
         elif after_date_str:
             resolved, err = self._resolve_tool_date(
-                {"date_str": after_date_str}, key="date_str", default="today"
+                {"date_str": after_date_str}, key="date_str", default="today", allow_past=True
             )
             if err:
                 return err
@@ -1474,10 +1480,28 @@ Be concise and friendly. Staff are busy — get to the point."""
         camp_name_filter = (tool_input.get("camp_name") or "").strip().lower()
         include_roster = bool(tool_input.get("include_roster", False))
 
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        is_past = week_end is not None and week_end <= today
+
+        def _camp_matches(query: str, title: str) -> bool:
+            """Match camp name with fallback: exact substring → all words → any meaningful word."""
+            t = title.lower()
+            if query in t:
+                return True
+            words = query.split()
+            if len(words) > 1 and all(w in t for w in words):
+                return True
+            # OR-match on words ≥4 chars — handles typos and partial queries
+            meaningful = [w for w in words if len(w) >= 4]
+            return bool(meaningful and any(w in t for w in meaningful))
+
         try:
-            camps = get_all_upcoming_camps(from_date=after_date)
-            if week_end:
-                camps = [c for c in camps if c.start_dt < week_end]
+            if is_past:
+                camps = get_all_past_camps(since_date=after_date, until_date=week_end)
+            else:
+                camps = get_all_upcoming_camps(from_date=after_date)
+                if week_end:
+                    camps = [c for c in camps if c.start_dt < week_end]
         except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
             return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
@@ -1486,33 +1510,53 @@ Be concise and friendly. Staff are busy — get to the point."""
             return "Sorry, I couldn't fetch camp data from MyStudio right now."
 
         if not camps:
-            return "No upcoming camps found in MyStudio."
+            label = "past" if is_past else "upcoming"
+            return f"No {label} camps found for that period."
 
         # Always cache the full unfiltered list so Excel export gets everything
         self._last_camp_data = {"all_camps": camps, "camps": camps, "rosters": {}}
 
         # Apply name filter
+        searched_all_time = False
         if camp_name_filter:
-            filtered = [c for c in camps if camp_name_filter in c.title.lower()]
+            filtered = [c for c in camps if _camp_matches(camp_name_filter, c.title)]
+            if not is_past and week_end is None:
+                # No date specified — also search past camps so name searches are complete
+                try:
+                    past_camps = get_all_past_camps()
+                except MystudioOTPRequired as _otp_exc:
+                    self._awaiting_mystudio_otp = True
+                    return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
+                except Exception as e:
+                    logger.error("get_all_past_camps fallback failed: %s", e)
+                    past_camps = []
+                past_matches = [c for c in past_camps if _camp_matches(camp_name_filter, c.title)]
+                # Merge: past first (oldest → newest), then upcoming
+                past_matches.sort(key=lambda c: c.start_dt)
+                filtered = past_matches + filtered
+                searched_all_time = True
             if not filtered:
+                label = "past" if is_past else "upcoming"
                 return (
-                    f"No upcoming camps matching '{tool_input.get('camp_name')}' found.\n\n"
+                    f"No {label} camps matching '{tool_input.get('camp_name')}' found.\n\n"
                     "Available camps this season:\n" + format_camps_summary(camps)
                 )
         else:
             filtered = camps
 
         # Roster mode: only when a specific camp name was given
+        roster_list_type = "D" if is_past else "P"
         if include_roster and camp_name_filter:
             if len(filtered) == 1:
                 camp = filtered[0]
-                kids = get_camp_roster(camp.event_id, camp.parent_id)
+                kids = get_camp_roster(camp.event_id, camp.parent_id, event_list_type=roster_list_type)
                 self._last_camp_data["rosters"][camp.event_id] = kids
                 return format_camp_roster(camp, kids)
             elif len(filtered) <= 4:
                 parts = []
                 for camp in filtered:
-                    kids = get_camp_roster(camp.event_id, camp.parent_id)
+                    elt = "D" if camp.start_dt < today else "P"
+                    kids = get_camp_roster(camp.event_id, camp.parent_id, event_list_type=elt)
                     self._last_camp_data["rosters"][camp.event_id] = kids
                     parts.append(format_camp_roster(camp, kids))
                 return "\n\n---\n\n".join(parts)
@@ -1523,7 +1567,11 @@ Be concise and friendly. Staff are busy — get to the point."""
                     + format_camps_summary(filtered)
                 )
 
-        return format_camps_summary(filtered)
+        result = format_camps_summary(filtered)
+        if searched_all_time:
+            year = today.year
+            result += f"\n\n[Searched all camps: Jan 1 {year} through end of season. This is the complete list.]"
+        return result
 
     def _handle_get_camp_revenue(self, tool_input: dict) -> str:
         """Calculate revenue for camps in a given week, with per-kid gotcha callouts."""
@@ -1537,7 +1585,7 @@ Be concise and friendly. Staff are busy — get to the point."""
 
         if week_of_str:
             resolved, err = self._resolve_tool_date(
-                {"date_str": week_of_str}, key="date_str", default="today"
+                {"date_str": week_of_str}, key="date_str", default="today", allow_past=True
             )
             if err:
                 return err
@@ -1552,10 +1600,16 @@ Be concise and friendly. Staff are busy — get to the point."""
             after_date = today + timedelta(days=days_until_monday)
             week_end = after_date + timedelta(days=7)
 
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        is_past = week_end is not None and week_end <= today
+
         try:
-            camps = get_all_upcoming_camps(from_date=after_date)
-            if week_end:
-                camps = [c for c in camps if c.start_dt < week_end]
+            if is_past:
+                camps = get_all_past_camps(since_date=after_date, until_date=week_end)
+            else:
+                camps = get_all_upcoming_camps(from_date=after_date)
+                if week_end:
+                    camps = [c for c in camps if c.start_dt < week_end]
         except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
             return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
@@ -1564,7 +1618,8 @@ Be concise and friendly. Staff are busy — get to the point."""
             return "Sorry, I couldn't fetch camp data from MyStudio right now."
 
         if not camps:
-            return "No upcoming camps found for that week."
+            label = "past" if is_past else "upcoming"
+            return f"No {label} camps found for that week."
 
         if camp_name_filter:
             camps = [c for c in camps if camp_name_filter in c.title.lower()]
