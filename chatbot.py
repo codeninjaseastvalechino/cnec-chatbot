@@ -344,6 +344,10 @@ SAFETY RULES — non-negotiable:
 - If a tool returns an error or unexpected data, report it — do not guess
   or proceed.
 
+When a staff member says "my schedule", "our schedule", or "today's schedule",
+they mean the center's schedule — GBS tours and student classes. Always call
+the appropriate tools to fetch it rather than assuming you don't have access.
+
 Be concise and friendly. Staff are busy — get to the point."""
 
     def _register_tools(self):
@@ -1137,16 +1141,12 @@ Be concise and friendly. Staff are busy — get to the point."""
         return students[0], None
 
     def _otp_prompt(self, gmail_error: str = None) -> str:
-        if gmail_error:
-            prefix = "⚠️ Couldn't auto-fetch the OTP from Gmail.\n\n"
-        else:
-            prefix = ""
+        reason = gmail_error or "connection timed out"
         return (
-            "🔐 **MyStudio verification needed.**\n\n"
-            + prefix
-            + f"Please check **{settings.GMAIL_ADDRESS}** for an email from MyStudio "
-            "and reply here with the **6-digit code**.\n\n"
-            "_(Reply with the code, or anything else to cancel and file a request.)_"
+            "⚠️ **MyStudio login failed — couldn't auto-fetch the verification code.**\n\n"
+            f"Reason: {reason}\n\n"
+            "Please try again by asking your question in a new browser tab. "
+            "If it keeps happening, let Prashant know."
         )
 
     def _handle_lookup_student(self, tool_input: dict) -> str:
@@ -1388,23 +1388,12 @@ Be concise and friendly. Staff are busy — get to the point."""
         return "\n".join(lines)
 
     def _handle_otp_submission(self, user_message: str) -> str:
-        """Handle OTP code submitted via chat."""
-        otp = user_message.strip()
-        if not (otp.isdigit() and len(otp) == 6):
-            self._awaiting_mystudio_otp = False
-            return (
-                "❌ MyStudio login cancelled. "
-                "Please file a request or try again by asking for the schedule."
-            )
-        try:
-            complete_otp_login(otp)
-            self._awaiting_mystudio_otp = False
-            return (
-                "✅ MyStudio connected! Cookies cached for 30 days.\n\n"
-                "Please ask your question again and I'll fetch the full schedule."
-            )
-        except Exception as e:
-            return f"❌ OTP failed: {e}\n\nPlease check the code and try again."
+        """Handle any message received while waiting for OTP (auto-fetch failed)."""
+        self._awaiting_mystudio_otp = False
+        return (
+            "Please try asking your question again in a new browser tab — "
+            "I'll attempt to reconnect to MyStudio automatically."
+        )
 
     def _handle_get_full_schedule(self, tool_input: dict) -> str:
         """Get full schedule (GBS tours + student appointments) for a specified date (defaults to today)."""
