@@ -17,35 +17,68 @@ import os
 from core.logger import get_logger
 logger = get_logger(__name__)
 from pathlib import Path
-from flask import Flask, request, jsonify, send_file, Response, stream_with_context
-from datetime import datetime
+import threading
+import uuid
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context, session
+from datetime import datetime, timedelta
 from audit_log import AuditLogger
 from analytics import QueryAnalytics
 from config.settings import settings
 
 app = Flask(__name__)
+# Sign session cookies so each browser gets a tamper-proof session id. Without a
+# stable SECRET_KEY, fall back to an ephemeral key so dev still works (sessions
+# reset on restart and won't survive across multiple workers).
+app.secret_key = settings.SECRET_KEY or os.urandom(32)
+if not settings.SECRET_KEY:
+    logger.warning(
+        "SECRET_KEY not set in .env — using an ephemeral key. Sessions reset on "
+        "restart and break across multiple workers. Set SECRET_KEY for production."
+    )
 audit = AuditLogger()
 analytics = QueryAnalytics()
 
 # Cache last fetched schedule for Excel export (avoid double API calls)
 _schedule_cache = {"gbs_sessions": [], "appointments": []}
 
-# Use mock chatbot for testing (doesn't hit any LLM API)
+# ── Per-session chatbot engines ──────────────────────────────────────────────
+# Each browser session gets its own ChatbotEngine so conversation history (and the
+# per-engine export caches / OTP state) are isolated per user and reset after idle.
+# A single global engine would share one conversation across every user and never
+# drop stale context (e.g. yesterday's date), which is exactly what we're fixing.
+_engines = {}                      # sid -> {"engine": <engine>, "last_seen": datetime}
+_engines_lock = threading.Lock()
+_SESSION_IDLE = timedelta(minutes=settings.SESSION_IDLE_MINUTES)
+
 if os.getenv("TEST_MODE", "").lower() == "true":
     print("🧪 TEST MODE ENABLED - Using mock chatbot (no LLM API calls)")
     from mock_chatbot import MockChatbotEngine
-    chatbot = MockChatbotEngine()
+
+    def _new_engine():
+        return MockChatbotEngine()
 else:
     from chatbot import ChatbotEngine
     from llm_provider import get_provider
 
+    # Fail fast with a clear message if required tenant config is missing
+    # (LineLeader creds, MyStudio company/user IDs) — before we touch any site.
     try:
+        settings.validate()
+    except EnvironmentError as e:
+        print(f"❌ {e}")
+        print("   Fill in the missing keys in your .env (see .env.example).")
+        raise
+
+    try:
+        # Provider is stateless — create once and share across all session engines.
         provider = get_provider()
-        chatbot = ChatbotEngine(provider=provider)
     except RuntimeError as e:
         print(f"❌ Failed to initialize LLM provider: {e}")
         print("   Check your .env file and LLM_PROVIDER setting.")
         raise
+
+    def _new_engine():
+        return ChatbotEngine(provider=provider)
 
     # Proactively verify MyStudio session on startup so the first request of the day
     # doesn't hit an unexpected 401. Auto-OTP runs silently if cookies have expired.
@@ -54,6 +87,33 @@ else:
         verify_and_refresh_session()
     except Exception as e:
         logger.warning("Startup MyStudio session check failed (non-fatal): %s", e)
+
+
+def get_engine():
+    """Return the ChatbotEngine for the current browser session.
+
+    Creates one on first contact, reuses it for follow-ups, and starts fresh after
+    SESSION_IDLE_MINUTES of inactivity. Idle sessions are evicted so memory stays
+    bounded — eviction doubles as the "stale context" reset (a returning-after-idle
+    browser finds its entry gone and gets a clean engine).
+    """
+    sid = session.get("sid")
+    if not sid:
+        sid = uuid.uuid4().hex
+        session["sid"] = sid
+    now = datetime.now()
+    with _engines_lock:
+        # Drop any session (including this one) idle past the threshold.
+        stale = [s for s, e in _engines.items() if now - e["last_seen"] > _SESSION_IDLE]
+        for s in stale:
+            del _engines[s]
+        entry = _engines.get(sid)
+        if entry is None:
+            entry = {"engine": _new_engine(), "last_seen": now}
+            _engines[sid] = entry
+        else:
+            entry["last_seen"] = now
+        return entry["engine"]
 
 # Serve logo from asset folder
 @app.route("/asset/<path:filename>")
@@ -829,17 +889,18 @@ def chat():
             })
 
     try:
+        engine = get_engine()
         statuses = []
         # Clear camp cache before each call so stale data doesn't bleed into new responses
         if not os.getenv("TEST_MODE", ""):
-            chatbot._last_camp_data = None
-        response_text = chatbot.chat(user_message, status_callback=lambda msg: statuses.append(msg), user_name=user_name)
+            engine._last_camp_data = None
+        response_text = engine.chat(user_message, status_callback=lambda msg: statuses.append(msg), user_name=user_name)
         audit.log_event("assistant_response", {"message": response_text, "user": user_name})
         # Enable download button if any schedule data is cached this session.
         # Button stays green after student lookups, cancels, etc. — cache persists.
-        camp_data = getattr(chatbot, "_last_camp_data", None)
-        gbs_sessions = getattr(chatbot, "_last_gbs_sessions", None)
-        export_label = getattr(chatbot, "_last_export_label", None)
+        camp_data = getattr(engine, "_last_camp_data", None)
+        gbs_sessions = getattr(engine, "_last_gbs_sessions", None)
+        export_label = getattr(engine, "_last_export_label", None)
         if camp_data and camp_data.get("camps"):
             export_type = "camps"
         elif gbs_sessions is not None:
@@ -1052,9 +1113,10 @@ def export_tours():
                 appt("010", "Ethan Brown",     "Karen Brown",      "909-555-0110", "Yellow Belt", "JR",              17, 0),
             ]
         else:
-            # Use cached schedule from last chat response (avoids double API calls)
-            cached_gbs = getattr(chatbot, "_last_gbs_sessions", None)
-            cached_appts = getattr(chatbot, "_last_appointments", None)
+            # Use cached schedule from this session's last chat response (avoids double API calls)
+            engine = get_engine()
+            cached_gbs = getattr(engine, "_last_gbs_sessions", None)
+            cached_appts = getattr(engine, "_last_appointments", None)
 
             if cached_gbs is not None or cached_appts is not None:
                 logger.info("Using cached schedule for Excel export")
@@ -1113,7 +1175,8 @@ def export_camps():
             camps = [mock_camp]
             rosters = {mock_camp.event_id: mock_kids}
         else:
-            camp_data = getattr(chatbot, "_last_camp_data", None)
+            engine = get_engine()
+            camp_data = getattr(engine, "_last_camp_data", None)
             if not camp_data or not camp_data.get("all_camps"):
                 return jsonify({"error": "No camp data found. Ask about camps first, then download."}), 400
             # Use the full unfiltered camp list so the Excel always contains every camp
