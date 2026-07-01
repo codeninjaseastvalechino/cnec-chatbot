@@ -1185,7 +1185,20 @@ Be concise and friendly. Staff are busy — get to the point."""
             return err
 
         try:
-            details = get_student_details(student.student_id, student.participant_id)
+            # details, attendance, and upcoming are independent (they need only
+            # the resolved student IDs), so fetch them concurrently. membership
+            # depends on reg_id from details, so it runs afterward.
+            with ThreadPoolExecutor(max_workers=3) as _ex:
+                _f_details = _ex.submit(get_student_details, student.student_id, student.participant_id)
+                _f_attend = _ex.submit(get_student_attendance_this_week, student.student_id, student.participant_id)
+                _f_upcoming = _ex.submit(
+                    get_student_upcoming_appointments,
+                    student.student_id, student.participant_id, days_ahead=30,
+                )
+                details = _f_details.result()
+                attended_this_week = _f_attend.result()
+                upcoming = _f_upcoming.result()
+
             billing_cycle_str = ""
             attended_this_cycle = 0
             expected_this_cycle = 0
@@ -1228,13 +1241,6 @@ Be concise and friendly. Staff are busy — get to the point."""
                                 )
                             except Exception:
                                 cycle_end = None
-
-            attended_this_week = get_student_attendance_this_week(
-                student.student_id, student.participant_id
-            )
-            upcoming = get_student_upcoming_appointments(
-                student.student_id, student.participant_id, days_ahead=30
-            )
 
         except MystudioOTPRequired as _otp_exc:
             self._awaiting_mystudio_otp = True
