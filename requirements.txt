@@ -1,10 +1,8 @@
 requests>=2.31.0
 python-dotenv>=1.0.0
 openpyxl>=3.1.0
-apscheduler>=3.10.0
 rich>=13.7.0
 anthropic>=0.25.0
-openai>=1.0.0
 flask>=3.0.0
 tzdata>=2024.1        # zoneinfo timezone DB — ensures CENTER_TIMEZONE resolves on slim/Windows hosts
 pytest>=8.0.0

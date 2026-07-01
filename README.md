@@ -169,7 +169,7 @@ Bot:  📅 Wednesday, June 3, 2026
 cnec-chatbot/
 ├── app.py              — Flask web server (the main thing to run)
 ├── chatbot.py          — Claude API integration + tool routing
-├── llm_provider.py     — Multi-provider LLM abstraction (Claude / Ollama)
+├── llm_provider.py     — LLM provider abstraction (Claude; extensible)
 ├── analytics.py        — Tracks queries/tools for usage insights
 ├── audit_log.py        — Full interaction log (every message)
 ├── format_tours.py     — Formats schedule data as readable bullets

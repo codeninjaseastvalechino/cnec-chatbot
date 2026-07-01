@@ -50,7 +50,6 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | **Clear LineLeader token** | `rm -f browser_state/lineleader_token.json` | Force fresh LineLeader login |
 | **Clear MyStudio cookies** | `rm -f browser_state/mystudio_cookies.json` | Force fresh MyStudio login + auto-OTP |
 | **View logs** | `tail -f logs/cnec_chatbot.log \| jq .` | Stream structured JSON logs |
-| **Set provider** | `LLM_PROVIDER=ollama python3 app.py` | Switch to Ollama backend |
 
 ---
 
@@ -108,7 +107,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 | 4 — Move / cancel appointments (single session) | ✅ Complete | Recurring all-future ops have gaps — see Known Issues |
 | 4 — Move / cancel appointments (all-future recurring) | ⚠️ Partial | API returns Success but does not cascade — under investigation |
 | 4 — Book new appointment | ⬜ Not started | Blocked: requires student-session token not yet solved |
-| 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete | Web UI + multi-provider LLM (Claude/Ollama) |
+| 5 — Chat UI + Claude API + function calling + Excel export | ✅ Complete | Web UI + Claude API (provider-agnostic engine) |
 | 6 — Employee schedule generator (stretch goal) | ⬜ Not started | Backlog |
 | 7 — Railway deployment (public launch) | ✅ Complete | Live at cnec.up.railway.app; TZ=America/Los_Angeles required for correct timezone filtering |
 | 8 — Auto Gmail OTP extraction | ✅ Complete | Gmail IMAP + app password; auto-extracts code, no human in the loop |
@@ -456,7 +455,7 @@ remaining    = expected - act_att
 | `child_display` | `"Name (Xy)"` list for table display — populated by enrichment |
 
 ### Milestone 5 — Chat UI + Multi-Provider Claude API with Function Calling
-- **`llm_provider.py`** — Multi-provider abstraction (Claude, Ollama, extensible for others)
+- **`llm_provider.py`** — Provider abstraction (Claude today, extensible for others)
 - `app.py` — Flask web server on port 5001
   - Routes: GET `/`, POST `/api/chat`, GET `/api/audit-log`, GET `/api/export/tours`, GET `/api/analytics`
   - Instantiates provider based on `LLM_PROVIDER` env var (defaults to Claude)
@@ -486,19 +485,17 @@ remaining    = expected - act_att
 - Audit trail of all interactions (JSON lines format)
 - Mock chatbot for testing without burning API tokens
 
-**How to run (three ways):**
+**How to run (two ways):**
 
 | Mode | Command | Cost | Speed | Tools | Best For |
 |------|---------|------|-------|-------|----------|
 | **Claude** | `python3 app.py` | ~$0.001-0.005/query | <1 sec | ✅ Full | Production, development |
-| **Ollama** | `LLM_PROVIDER=ollama python3 app.py` | Free | 2-5 sec | ⚠️ Limited | Cost-free testing (chat-only) |
 | **Mock** | `TEST_MODE=true python3 app.py` | Free | Instant | ✅ Simulated | UI testing, no API calls |
 
 Navigate to **http://localhost:5001** or **http://<your-ip>:5001** from another machine.
 
 **Requirements:**
 - Claude mode: Requires `ANTHROPIC_API_KEY` in `.env`
-- Ollama mode: Requires `ollama serve` running in another terminal
 - Mock mode: No external services needed
 
 ---
@@ -521,7 +518,6 @@ class LLMProvider(ABC):
 
 **2. Implementations**
 - `ClaudeProvider` — Anthropic SDK, full tool support ✅
-- `OllamaProvider` — OpenAI-compatible API, limited tool support ⚠️
 
 **3. Unified Response Format**
 All providers return the same structure:
@@ -535,7 +531,7 @@ All providers return the same structure:
 
 ### How It Works
 
-1. **Environment-driven selection** — `LLM_PROVIDER=claude` or `LLM_PROVIDER=ollama`
+1. **Environment-driven selection** — `LLM_PROVIDER` (defaults to `claude`)
 2. **Factory pattern** — `get_provider()` creates the right instance
 3. **Injected into ChatbotEngine** — `ChatbotEngine(provider=provider)`
 4. **Identical agentic loop** — Same tool calling flow for all providers
@@ -647,10 +643,8 @@ All credentials and configuration live in `.env` (copy from `.env.example`). Cri
 | `LINELEADER_USERNAME` | LineLeader/ChildCareCRM login | Milestone 1 + all | `user@codeninjas.com` |
 | `LINELEADER_PASSWORD` | LineLeader password | Milestone 1 + all | (password) |
 | `ANTHROPIC_API_KEY` | Claude API access | Milestone 5 (real mode) | `sk-ant-...` |
-| `LLM_PROVIDER` | Which LLM backend to use | Milestone 5 | `claude` or `ollama` |
-| `CLAUDE_MODEL` | Which Claude model | Milestone 5 (Claude mode) | `claude-haiku-4-5` |
-| `OLLAMA_BASE_URL` | Ollama server URL | Milestone 5 (Ollama mode) | `http://localhost:11434/v1` |
-| `OLLAMA_MODEL` | Which Ollama model | Milestone 5 (Ollama mode) | `mistral` |
+| `LLM_PROVIDER` | Which LLM backend to use | Milestone 5 | `claude` (default) |
+| `CLAUDE_MODEL` | Which Claude model | Milestone 5 | `claude-haiku-4-5` |
 
 **Important:**
 - `.env` is git-ignored (never commit it)
@@ -1120,111 +1114,6 @@ model="claude-opus-4-8",     # Best reasoning, highest cost
 - Sonnet: ~$0.003–0.015 per query
 - Opus: ~$0.005–0.025 per query
 
-### Alternative: Ollama (Free, Local, No API Key Needed)
-
-Run LLMs locally on your machine for **zero cost**. Perfect for development and testing.
-
-**Why Ollama?**
-- Completely free (no API costs)
-- Runs entirely on your machine (private)
-- Full tool calling support (same agentic loop as Claude)
-- Slower than Claude (~2-5 seconds per response vs. <1 second), but functional for development
-- Great for testing without consuming API credits
-
-#### Installation & Setup
-
-**1. Install Ollama**
-```bash
-# Download from https://ollama.ai
-# Then run the installer
-# Verify installation:
-ollama --version
-```
-
-**2. Start Ollama server**
-```bash
-ollama serve
-# This starts the OpenAI-compatible API on http://localhost:11434
-# Keep this terminal open while using the chatbot
-```
-
-**3. Pull a model (in another terminal)**
-```bash
-ollama pull mistral
-# Choose from: mistral, neural-chat, llama2, dolphin-mixtral
-# First pull takes ~5-10 min (depends on model size + internet)
-```
-
-#### Configuration
-
-Add to `.env`:
-```
-LLM_PROVIDER=ollama
-OLLAMA_MODEL=mistral
-OLLAMA_BASE_URL=http://localhost:11434/v1
-```
-
-Or use environment variables:
-```bash
-LLM_PROVIDER=ollama OLLAMA_MODEL=neural-chat python3 app.py
-```
-
-#### Running with Ollama
-
-**Web UI (with Ollama backend):**
-```bash
-# Terminal 1: Start Ollama server
-ollama serve
-
-# Terminal 2: Run the app
-LLM_PROVIDER=ollama python3 app.py
-# Navigate to http://localhost:5001
-```
-
-**CLI chatbot (with Ollama backend):**
-```bash
-LLM_PROVIDER=ollama python3 test_chatbot.py
-```
-
-**Recommended Ollama models:**
-| Model | Size | RAM | Speed | Notes |
-|-------|------|-----|-------|-------|
-| `mistral` | 7B | 4GB | Fast | Best for instructions, good balance |
-| `neural-chat` | 7B | 4GB | Fast | Optimized for chat, friendly responses |
-| `llama2` | 7B | 4GB | Fast | General purpose, safe |
-| `dolphin-mixtral` | 47B | 20GB | Slower | More capable, requires more resources |
-
-**Performance comparison:**
-| Provider | Speed | Cost | Setup |
-|----------|-------|------|-------|
-| Claude (Haiku) | <1 sec | $0.001-0.005/query | API key only |
-| Ollama (mistral) | 2-5 sec | Free | Download + run locally |
-| Mock chatbot | Instant | Free | None |
-
-#### Ollama Limitations ⚠️
-
-**CRITICAL:** Ollama has inconsistent tool calling support. While the chatbot is designed to work with Ollama, real-world testing shows that Ollama models (including Mistral) often ignore tool definitions and don't call functions reliably.
-
-**What breaks with Ollama:**
-- `get_todays_tours()` — doesn't call the tool, asks user to describe tours instead
-- `reschedule_tour()` — doesn't call the tool reliably
-- `get_tour_details()` — inconsistent results
-
-**Workaround:** Use `TEST_MODE=true` for cost-free, reliable testing without Ollama. Mock mode provides instant feedback and zero API costs.
-
-#### Comparison: Which to Use
-
-| Use Case | Command | Notes |
-|----------|---------|-------|
-| **Development (fastest)** | `TEST_MODE=true python3 app.py` | Instant, no API keys, no setup |
-| **Development (real data)** | `python3 app.py` | Real Claude, costs ~$0.001-0.005/query |
-| **Production** | `python3 app.py` | Claude API, reliable tool calling, ~$0.001-0.005/query |
-| **Free local testing** | Don't use Ollama | Tool calling doesn't work; use mock mode instead |
-
-#### Switching Between Providers
-
-For complete examples, see [How to Run](#how-to-run) → [Milestone 5: Web Chat UI](#milestone-5-web-chat-ui).
-
 ---
 
 ## Safety & Design
@@ -1373,9 +1262,7 @@ python-dotenv>=1.0.0  # .env loading
 anthropic>=0.25.0     # Claude API (Milestone 5 web UI)
 flask>=3.0.0          # web server (Milestone 5)
 openpyxl>=3.1.0       # Excel export (Milestone 5)
-apscheduler>=3.10.0   # scheduled runs (Milestone 6 — future)
 rich>=13.7.0          # terminal output formatting
-openai>=1.0.0         # OpenAI SDK (Ollama compatibility)
 # NOTE: playwright removed (ADR-007) — login is pure requests OAuth2 PKCE
 ```
 
@@ -1481,24 +1368,6 @@ python3 app.py
 - Audit logging to `logs/audit.jsonl`
 
 **Cost:** ~$0.001–0.005 per query (Haiku model)
-
----
-
-#### Option C: Ollama Mode (Free Local LLM) ⚠️ Limited
-```bash
-# Terminal 1: Start Ollama server
-ollama serve
-
-# Terminal 2: Run the app
-source .venv/bin/activate
-LLM_PROVIDER=ollama python3 app.py
-```
-
-**Prerequisites:** Ollama installed + running, `OLLAMA_MODEL` in `.env`
-
-**⚠️ Important Limitation:** Ollama has inconsistent tool calling support. Use Option A (mock) instead for cost-free testing.
-
-See [Ollama Limitations](#ollama-limitations) for details.
 
 ---
 
@@ -1790,7 +1659,6 @@ def mock_lineleader_api(monkeypatch):
 | Issue | Workaround |
 |-------|-----------|
 | ~~Gmail App Passwords unavailable~~ | ✅ Resolved (M8) — `eastvalechinocodeninjas@gmail.com` is a regular Gmail account. Enabled 2-Step Verification + created app password. OTP is now auto-extracted via IMAP. |
-| Ollama tool calling unreliable | Ollama models ignore tool definitions. Use `TEST_MODE=true` for cost-free testing instead. |
 | **All-future cancel does not cascade** | `cancel_registration_type: "Y"` returns Success but only deletes the targeted occurrence — future recurring sessions remain. Single cancel (`"N"`) works correctly. Root cause unknown — may need additional params. Under investigation. |
 | **All-future reschedule does not cascade** | `allow_recurring_reschedule: "Y"` + `selected_reschedule_type: "Y"` returns Success but future occurrences are not moved. Single reschedule works. Same root cause as above. |
 | **Book new appointment blocked** | `stripeClassAppointmentRegistration` requires a student-session token from the POS flow — not available from staff auth. Deferred until token source identified. |

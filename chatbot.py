@@ -1,7 +1,7 @@
 """
 ChatbotEngine: LLM-agnostic chatbot with function calling.
 
-Supports multiple LLM providers (Claude, Ollama) via provider abstraction.
+Provider-agnostic via the LLMProvider abstraction (Claude today).
 
 Handles:
 - Tool definitions for Milestone 1 (LineLeader GBS Tours)
@@ -305,18 +305,16 @@ class ChatbotEngine:
                 logger.info("Request complete | total: %.1fs | response: %d chars", total_elapsed, len(text or ""))
                 _tracker.finish(response_chars=len(text or ""))
 
-                # Add assistant's response to history
-                # For Claude: use the raw response blocks to maintain conversation structure
-                # For Ollama: use the text content
+                # Add assistant's response to history. Claude returns structured
+                # content blocks — preserve them to keep the conversation shape;
+                # a text-only provider falls back to the extracted text.
                 raw_response = response_data.get("raw")
                 if raw_response and hasattr(raw_response, "content"):
-                    # Claude response - use original content blocks
                     self.conversation_history.append({
                         "role": "assistant",
                         "content": raw_response.content
                     })
                 else:
-                    # Ollama or other providers - use text content
                     self.conversation_history.append({
                         "role": "assistant",
                         "content": text
