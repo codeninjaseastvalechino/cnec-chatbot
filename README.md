@@ -52,8 +52,22 @@ LINELEADER_USERNAME=venay.bhatia@codeninjas.com
 LINELEADER_PASSWORD=your_password
 MYSTUDIO_USERNAME=eastvalechinocodeninjas@gmail.com
 MYSTUDIO_PASSWORD=your_password
+MYSTUDIO_COMPANY_ID=578        # required — center's MyStudio company id (Eastvale Chino: 578)
+MYSTUDIO_USER_ID=9901          # required — center's MyStudio staff id (Eastvale Chino: 9901)
 ANTHROPIC_API_KEY=sk-ant-...   # only needed for web UI
+SECRET_KEY=...                 # required for web UI — signs session cookies (see below)
+CENTER_TIMEZONE=America/Los_Angeles   # anchors the assistant's sense of "today"
+TZ=America/Los_Angeles                # keeps LineLeader tour times / logs in local time
 ```
+
+> The app **fails to start** if `MYSTUDIO_COMPANY_ID`, `MYSTUDIO_USER_ID`, or the
+> LineLeader credentials are missing — this is intentional (a missing center id
+> must not silently fall back to another center's data).
+>
+> Generate `SECRET_KEY` once with:
+> `python3 -c "import secrets; print(secrets.token_hex(32))"`
+> If it's unset the web UI still runs, but each browser's chat resets on every
+> restart. See `.env.example` for the full list of optional keys.
 
 ### Start the web UI
 ```bash

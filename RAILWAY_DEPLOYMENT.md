@@ -58,9 +58,14 @@ In Service → Variables, add all credentials from your `.env`:
 | `LINELEADER_PASSWORD` | (from .env) |
 | `MYSTUDIO_USERNAME` | (from .env) |
 | `MYSTUDIO_PASSWORD` | (from .env) |
+| `MYSTUDIO_COMPANY_ID` | (from .env) — **required**, app won't boot without it |
+| `MYSTUDIO_USER_ID` | (from .env) — **required**, app won't boot without it |
 | `ANTHROPIC_API_KEY` | (from .env) |
 | `LLM_PROVIDER` | `claude` |
 | `CLAUDE_MODEL` | `claude-haiku-4-5` |
+| `SECRET_KEY` | random hex — `python3 -c "import secrets; print(secrets.token_hex(32))"` (set once; changing it logs everyone out) |
+| `CENTER_TIMEZONE` | `America/Los_Angeles` |
+| `TZ` | `America/Los_Angeles` (needed for correct LineLeader tour times on the UTC host) |
 
 ### Step 4 — Deploy
 Push the 3 file changes to GitHub → Railway auto-deploys.

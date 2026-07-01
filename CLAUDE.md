@@ -997,6 +997,52 @@ Claude now parses correctly and formats as nested bullets.
 
 ---
 
+### ADR-011 — Per-session engine registry + timezone-anchored dates
+**Date:** July 2026 | **Milestone:** post-5 hardening
+
+**Two related fixes to correctness bugs surfaced by the deployed (Railway) app.**
+
+**Problem 1 — one shared conversation for everyone.** `app.py` held a single
+module-level `ChatbotEngine`. Its `conversation_history` was never reset and was
+shared across all users, so (a) staff members' contexts bled into each other and
+(b) stale context accumulated for as long as the server stayed up — old turns
+stamped with a previous day's date drowned out the correct system-prompt date,
+making the bot report the wrong day.
+
+**Decision:** Replace the global engine with a per-browser registry (`_engines`
+in `app.py`), keyed off a signed Flask `session["sid"]` cookie. `get_engine()`
+returns the current browser's engine, reusing it for follow-ups and evicting +
+recreating it after `SESSION_IDLE_MINUTES` of inactivity. This isolates history
+(and the per-engine export caches / OTP state) per user and drops stale context.
+- Requires `SECRET_KEY` in `.env` to sign the cookie (ephemeral fallback in dev).
+- Idle timeout (not calendar day) is the reset signal — a conversation spanning
+  midnight survives; a genuinely idle one resets. Eviction also bounds memory.
+- **This plumbing is reusable by the planned role-based auth** (Security
+  Architecture § Layer 2): the same `SECRET_KEY` signs `session["role"]`
+  alongside `session["sid"]`. Reuse only — roles remain unbuilt.
+
+**Problem 2 — host-clock dates.** `date.today()` / `datetime.now()` used the
+host's timezone. On Railway (UTC) the app's sense of "today" drifted a day in the
+evening Pacific. Even after clearing stale context, the resolver and the system
+prompt could disagree.
+
+**Decision:** One timezone-anchored clock. `core/date_utils.py` gained
+`now_local()`, `today_local()`, `start_of_today_local()`, and `week_bounds()`,
+all pinned to `CENTER_TIMEZONE` (config-driven, ADR-005). Every business-logic
+"today"/"now" (system prompt, `resolve_date`, camp/student/schedule/tour lookups,
+export + CLI formatters) routes through these. Infrastructure timestamps
+(logs, audit, token/cookie expiry) intentionally stay UTC.
+- `TZ` is still set for LineLeader tour *times*, which convert via bare
+  `.astimezone()` (host tz) — left as-is; converting those would remove the last
+  `TZ` dependency but wasn't worth the churn.
+
+**Tests:** `tests/test_app_sessions.py` (registry isolation + idle reset),
+`tests/test_settings.py` (required-key validation), `TestClockHelpers` in
+`tests/core/test_date_utils.py`. `tests/conftest.py` supplies the now-required
+MyStudio IDs so the suite runs without a real `.env`.
+
+---
+
 ---
 
 ## Claude API Models & Pricing
@@ -1191,6 +1237,7 @@ Two roles. Role is determined after Layer 1 passes.
 
 **Implementation notes:**
 - Flask `session` with `SECRET_KEY` (add to `.env`) for signed cookies — role stored as `session["role"] = "owner"` or `"sensei"`
+  - ✅ **The `SECRET_KEY` + Flask `session` plumbing already exists** — it was added for per-browser conversation isolation (see ADR-011), NOT for auth. The role gate can reuse the same `SECRET_KEY` (no new secret needed); it just adds `session["role"]` alongside the existing `session["sid"]`. This is plumbing reuse only — role-based access is still unbuilt.
 - `@require_role("owner")` decorator on tool handlers that need it — returns a clean "This feature requires owner access" message if role insufficient, not a 403
 - Revenue and financial tools: block at the chatbot tool-execution layer (not just UI) — even if someone crafts a direct API call, the tool checks `session["role"]`
 - `ADMIN_PASSWORD` already exists in `settings.py` and `app.py` — Owner login should reuse this rather than adding a new variable
