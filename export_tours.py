@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Union, Dict, Optional, Any
 import asyncio
+from core.date_utils import now_local
 
 
 async def create_excel_file(sessions, filename=None):
@@ -107,7 +108,7 @@ async def create_excel_file(sessions, filename=None):
 
     # Save file
     if not filename:
-        date_str = sessions[0].date_display() if sessions else datetime.now().strftime("%Y-%m-%d")
+        date_str = sessions[0].date_display() if sessions else now_local().strftime("%Y-%m-%d")
         filename = f"tours_{date_str.replace(' ', '_')}.xlsx"
 
     export_dir = Path("exports")
@@ -258,7 +259,7 @@ def create_camps_excel_file(camps, rosters=None, filename=None):
         ws.cell(row=last_row + 1, column=1, value=f"Total active enrollments: {total_kids}").font = Font(bold=True)
 
     if not filename:
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = now_local().strftime("%Y-%m-%d")
         filename = f"camps_{date_str}.xlsx"
 
     export_dir = Path("exports")

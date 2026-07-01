@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 from config.settings import settings
+from core.date_utils import start_of_today_local
 from core.logger import get_logger
 from sites.mystudio.auth import get_session, clear_cached_cookies, MystudioOTPRequired
 
@@ -199,7 +200,7 @@ def get_all_upcoming_camps(from_date: Optional[datetime] = None) -> List[CampRec
         List of CampRecord sorted by start_dt.
     """
     if from_date is None:
-        from_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        from_date = start_of_today_local()
 
     parents = get_live_parent_events()
     if not parents:
@@ -231,7 +232,7 @@ def get_all_past_camps(since_date: Optional[datetime] = None, until_date: Option
 
     Returns list sorted by start_dt descending (most recent first).
     """
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = start_of_today_local()
     if until_date is None:
         until_date = today
     if since_date is None:
@@ -473,7 +474,7 @@ def get_camp_revenue(camp: CampRecord) -> Dict[str, Any]:
 
     expected = _expected_camp_price(camp.title)
 
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = start_of_today_local()
     list_type = "D" if camp.start_dt < today else "P"
     rows = _get_roster_raw_rows(camp.event_id, camp.parent_id, event_list_type=list_type)
     if rows is None:

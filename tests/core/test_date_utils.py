@@ -1,18 +1,20 @@
 """Tests for core/date_utils.py — date/time resolution and conflict detection."""
 import pytest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
-from core.date_utils import resolve_date, resolve_time, resolve_datetime
+from core.date_utils import (
+    resolve_date, resolve_time, resolve_datetime,
+    now_local, today_local, start_of_today_local, week_bounds,
+)
 
 TODAY = date(2026, 6, 4)   # Thursday
 FIXED_NOW = datetime(2026, 6, 4, 12, 0, 0)
 
 
 def _resolve(date_str, today=TODAY):
-    with patch("core.date_utils.date") as mock_date:
-        mock_date.today.return_value = today
-        mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+    # resolve_date() anchors "today" via core.date_utils.today_local()
+    with patch("core.date_utils.today_local", return_value=today):
         return resolve_date(date_str)
 
 
@@ -198,26 +200,72 @@ class TestResolveTime:
 
 class TestResolveDatetime:
     def test_friday_10am(self):
-        with patch("core.date_utils.date") as mock_date:
-            mock_date.today.return_value = TODAY
-            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+        with patch("core.date_utils.today_local", return_value=TODAY):
             result = resolve_datetime("Friday", "10am")
         assert result.date() == date(2026, 6, 5)
         assert result.hour == 10
         assert result.minute == 0
 
     def test_conflict_propagates(self):
-        with patch("core.date_utils.date") as mock_date:
-            mock_date.today.return_value = TODAY
-            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+        with patch("core.date_utils.today_local", return_value=TODAY):
             with pytest.raises(ValueError) as exc:
                 resolve_datetime("Friday June 6th", "10am")
         assert "Saturday" in str(exc.value)
 
     def test_bad_time_propagates(self):
-        with patch("core.date_utils.date") as mock_date:
-            mock_date.today.return_value = TODAY
-            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+        with patch("core.date_utils.today_local", return_value=TODAY):
             with pytest.raises(ValueError) as exc:
                 resolve_datetime("Friday", "noon")
         assert "Could not understand" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Timezone-anchored clock helpers
+# ---------------------------------------------------------------------------
+
+class TestClockHelpers:
+    def test_now_local_uses_center_timezone_not_host(self):
+        # Regardless of the host clock, now_local() reflects CENTER_TIMEZONE.
+        # America/Los_Angeles is UTC-7/-8, so late-UTC-evening is still the
+        # previous calendar day in Pacific — the exact off-by-one we guard against.
+        with patch("config.settings.settings.CENTER_TIMEZONE", "America/Los_Angeles"):
+            now = now_local()
+        assert now.tzinfo is None  # naive, for comparison with API-parsed datetimes
+
+    def test_today_local_matches_now_local_date(self):
+        assert today_local() == now_local().date()
+
+    def test_start_of_today_local_is_midnight(self):
+        s = start_of_today_local()
+        assert (s.hour, s.minute, s.second, s.microsecond) == (0, 0, 0, 0)
+        assert s.date() == today_local()
+
+    def test_week_bounds_from_midweek(self):
+        # Thursday 2026-06-04 -> Mon 06-01 .. next Mon 06-08 (half-open)
+        monday, nxt = week_bounds(date(2026, 6, 4))
+        assert monday == datetime(2026, 6, 1)
+        assert nxt == datetime(2026, 6, 8)
+        assert monday.weekday() == 0
+
+    def test_week_bounds_on_monday_returns_same_monday(self):
+        monday, nxt = week_bounds(date(2026, 6, 1))  # a Monday
+        assert monday == datetime(2026, 6, 1)
+        assert nxt == datetime(2026, 6, 8)
+
+    def test_week_bounds_on_sunday_stays_in_that_week(self):
+        # Sunday 2026-06-07 belongs to the Mon 06-01 week
+        monday, nxt = week_bounds(date(2026, 6, 7))
+        assert monday == datetime(2026, 6, 1)
+        assert nxt == datetime(2026, 6, 8)
+
+    def test_week_bounds_accepts_datetime(self):
+        monday, nxt = week_bounds(datetime(2026, 6, 4, 15, 30))
+        assert monday == datetime(2026, 6, 1)
+        assert nxt == datetime(2026, 6, 8)
+
+    def test_next_week_idiom(self):
+        # week_bounds(start_of_today + 7d) is how camp handlers compute "next week".
+        with patch("core.date_utils.today_local", return_value=date(2026, 6, 4)):  # Thu
+            nxt_mon, nxt_end = week_bounds(start_of_today_local() + timedelta(days=7))
+        assert nxt_mon == datetime(2026, 6, 8)   # the following Monday
+        assert nxt_end == datetime(2026, 6, 15)

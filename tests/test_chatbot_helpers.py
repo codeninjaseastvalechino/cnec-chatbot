@@ -30,9 +30,8 @@ class TestResolveToolDate:
 
     def _resolve(self, tool_input, key="date_str", default="today"):
         engine = _make_engine()
-        with patch("core.date_utils.date") as mock_date:
-            mock_date.today.return_value = self.TODAY
-            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+        # resolve_date() anchors "today" via core.date_utils.today_local()
+        with patch("core.date_utils.today_local", return_value=self.TODAY):
             return engine._resolve_tool_date(tool_input, key=key, default=default)
 
     def test_returns_resolved_date_on_success(self):

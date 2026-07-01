@@ -20,6 +20,8 @@ import sys
 from datetime import date, datetime
 from typing import List, Optional
 
+from core.date_utils import today_local
+
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
@@ -41,7 +43,7 @@ console = Console()
 async def main() -> None:
     console.rule("[bold cyan]CNEC Chatbot — Milestone 1[/bold cyan]")
     console.print(
-        f"[dim]Fetching sessions for {date.today().strftime('%A, %B %d, %Y')}[/dim]\n"
+        f"[dim]Fetching sessions for {today_local().strftime('%A, %B %d, %Y')}[/dim]\n"
     )
 
     try:
@@ -136,7 +138,7 @@ def _display_sessions(sessions: List[GBSSession]) -> None:
         return
 
     table = Table(
-        title=f"Today's GBS Tours — {date.today().strftime('%A, %B %d, %Y')}",
+        title=f"Today's GBS Tours — {today_local().strftime('%A, %B %d, %Y')}",
         box=box.ROUNDED,
         show_header=True,
         header_style="bold cyan",
@@ -260,7 +262,7 @@ def _resolve_date(date_str: str) -> Optional[date]:
     import calendar
 
     s = date_str.strip().lower()
-    today = date.today()
+    today = today_local()
 
     if s in ("today", ""):
         return today

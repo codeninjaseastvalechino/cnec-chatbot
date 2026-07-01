@@ -13,6 +13,48 @@ from typing import Optional
 
 _DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 _DAY_SET = {d.lower() for d in _DAYS}
+
+
+def now_local() -> datetime:
+    """Current datetime in the center's timezone, returned as a naive datetime.
+
+    The whole app compares against naive datetimes (API date strings parse to
+    naive values), so we convert to the center's wall clock and drop tzinfo to
+    stay comparable. Anchored to CENTER_TIMEZONE — not the host's clock — so
+    "today"/"now" is correct whether we run on a Pacific Mac or a UTC cloud host.
+    """
+    from config.settings import settings
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(settings.CENTER_TIMEZONE)).replace(tzinfo=None)
+    except Exception:
+        return datetime.now()
+
+
+def today_local() -> date:
+    """Today's date in the center's timezone (see now_local)."""
+    return now_local().date()
+
+
+def start_of_today_local() -> datetime:
+    """Midnight (00:00:00) today in the center's timezone, as a naive datetime.
+
+    Replaces the repeated `now_local().replace(hour=0, minute=0, second=0,
+    microsecond=0)` idiom used to get a comparable "start of today".
+    """
+    return datetime.combine(today_local(), datetime.min.time())
+
+
+def week_bounds(dt) -> Tuple[datetime, datetime]:
+    """Return (Monday 00:00, following Monday 00:00) for the week containing `dt`.
+
+    Accepts a date or datetime; returns naive datetimes. The range is half-open —
+    Monday <= x < next Monday — so it covers exactly that Mon–Sun week. Use for
+    "week of X" / "that week" filters instead of hand-rolling weekday() math.
+    """
+    d = dt.date() if isinstance(dt, datetime) else dt
+    monday = datetime.combine(d - timedelta(days=d.weekday()), datetime.min.time())
+    return monday, monday + timedelta(days=7)
 _MONTH_MAP = {
     "january": 1, "february": 2, "march": 3, "april": 4,
     "may": 5, "june": 6, "july": 7, "august": 8,
@@ -37,7 +79,7 @@ def resolve_date(date_str: str, allow_past: bool = False) -> datetime:
     Raises ValueError with a user-friendly message on conflict or parse failure.
     """
     s = date_str.strip().lower()
-    today = date.today()
+    today = today_local()
 
     if s == "today":
         return datetime.combine(today, datetime.min.time())

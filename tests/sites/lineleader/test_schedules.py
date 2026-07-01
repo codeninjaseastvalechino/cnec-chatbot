@@ -20,9 +20,8 @@ from sites.lineleader.schedules import (
 class TestCalculateAge:
     def test_basic_age(self):
         from unittest.mock import patch
-        with patch("sites.lineleader.schedules.date") as mock_date:
-            mock_date.today.return_value = date(2026, 6, 4)
-            mock_date.fromisoformat = date.fromisoformat
+        # _calculate_age anchors "today" via today_local()
+        with patch("sites.lineleader.schedules.today_local", return_value=date(2026, 6, 4)):
             assert _calculate_age("2020-06-04") == 6   # birthday today
             assert _calculate_age("2020-06-05") == 5   # birthday tomorrow (not yet)
             assert _calculate_age("2020-06-03") == 6   # birthday yesterday

@@ -15,7 +15,9 @@ Endpoints:
 """
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime
+
+from core.date_utils import today_local, week_bounds
 from typing import List, Dict, Any, Optional
 
 from config.settings import settings
@@ -197,7 +199,7 @@ def get_student_sessions_by_type(
     session = get_session()
     url = f"{BASE_URL}/getParticipantRegDetailsByType"
     params = {
-        "class_filter_date": from_date or date.today().strftime("%Y-%m-%d"),
+        "class_filter_date": from_date or today_local().strftime("%Y-%m-%d"),
         "class_filter_days_value": str(days),
         "class_filter_type": filter_type,
         "company_id": COMPANY_ID,
@@ -230,8 +232,7 @@ def get_student_attendance_this_week(student_id: str, participant_id: str) -> in
     """
     Count sessions with class_attendance_status == "Attended" in the current Mon–Sun week.
     """
-    today = date.today()
-    monday = today - timedelta(days=today.weekday())
+    monday, _ = week_bounds(today_local())
     sessions = get_student_sessions_by_type(
         student_id, participant_id,
         filter_type="P",
@@ -259,7 +260,7 @@ def get_student_upcoming_appointments(
       .class_appointment_times_id — slot ID (move target validation)
       .class_appointment_id       — class type ID (move target validation)
     """
-    today = date.today().strftime("%Y-%m-%d")
+    today = today_local().strftime("%Y-%m-%d")
     sessions = get_student_sessions_by_type(
         student_id, participant_id,
         filter_type="U",
@@ -294,7 +295,7 @@ def get_student_past_not_attended_appointments(
     sessions = get_student_sessions_by_type(
         student_id, participant_id,
         filter_type="P",
-        from_date=date.today().strftime("%Y-%m-%d"),
+        from_date=today_local().strftime("%Y-%m-%d"),
         days=days_back,
     )
 

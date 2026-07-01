@@ -27,6 +27,7 @@ for key, value in env_vars.items():
         os.environ[key] = value
 
 from core.logger import get_logger
+from core.date_utils import now_local, today_local, start_of_today_local, week_bounds
 from config.settings import settings
 from llm_provider import get_provider
 from analytics import QueryAnalytics
@@ -322,15 +323,19 @@ class ChatbotEngine:
 
     def _get_system_prompt(self) -> str:
         """System prompt: identity, safety, tone only."""
-        from datetime import date
-        today = date.today()
-        today_str = today.strftime("%A, %B %-d, %Y")  # e.g. "Thursday, June 4, 2026"
+        # now_local() is anchored to CENTER_TIMEZONE so "today" is correct on any
+        # host (e.g. UTC on Railway), not the server's local clock.
+        now = now_local()
+        today_str = now.strftime("%A, %B %-d, %Y")   # e.g. "Tuesday, June 30, 2026"
+        time_str = now.strftime("%-I:%M %p")          # e.g. "3:15 PM"
         return f"""You are an operations assistant for Code Ninjas Eastvale Chino.
 You help staff manage daily schedules, student appointments, and tours
 by querying the center's systems and taking action on their behalf.
 
-Today is {today_str}. Use this as your anchor when resolving relative date
-references like "today", "tomorrow", "Friday", "next week", etc.
+The current date and time is {today_str}, {time_str} ({settings.CENTER_TIMEZONE}).
+This is the single source of truth for "today", "now", "tomorrow", "this week",
+and every other relative date reference. Never infer the date from earlier
+messages, tool outputs, or anything else in the conversation — only from this line.
 
 You have access to tools that connect to LineLeader (tours) and MyStudio
 (student classes). Use whichever tools are appropriate to fully answer
@@ -1157,7 +1162,7 @@ Be concise and friendly. Staff are busy — get to the point."""
             get_student_upcoming_appointments,
             get_membership_reg_details,
         )
-        from datetime import date as _date, datetime as _datetime
+        from datetime import datetime as _datetime
         import math as _math
 
         student_name = tool_input.get("student_name", "").strip()
@@ -1257,7 +1262,6 @@ Be concise and friendly. Staff are busy — get to the point."""
     def _handle_get_student_recent_appointments(self, tool_input: dict) -> str:
         """Return the last N past sessions for a student with real attendance status."""
         from sites.mystudio.students import get_student_sessions_by_type
-        from datetime import date as _date
 
         student_name = tool_input.get("student_name", "").strip()
         limit = int(tool_input.get("limit") or 5)
@@ -1273,7 +1277,7 @@ Be concise and friendly. Staff are busy — get to the point."""
             raw = get_student_sessions_by_type(
                 student.student_id, student.participant_id,
                 filter_type="P",
-                from_date=_date.today().strftime("%Y-%m-%d"),
+                from_date=today_local().strftime("%Y-%m-%d"),
                 days=90,
             )
         except MystudioOTPRequired as _otp_exc:
@@ -1300,7 +1304,6 @@ Be concise and friendly. Staff are busy — get to the point."""
     def _handle_get_student_session_on_date(self, tool_input: dict) -> str:
         """Look up a student's session on a specific date — past or upcoming."""
         from sites.mystudio.students import get_student_upcoming_appointments, get_student_sessions_by_type
-        from datetime import date as _date
 
         student_name = tool_input.get("student_name", "").strip()
         if not student_name:
@@ -1318,7 +1321,7 @@ Be concise and friendly. Staff are busy — get to the point."""
         if err:
             return err
 
-        is_past = resolved.date() < _date.today()
+        is_past = resolved.date() < today_local()
 
         try:
             if not is_past:
@@ -1332,12 +1335,11 @@ Be concise and friendly. Staff are busy — get to the point."""
                 return f"No session found for {student.name} on {date_label}."
 
             # Past date — fetch raw sessions to get attendance status
-            from datetime import date as _date2
-            days_back = (_date2.today() - resolved.date()).days + 1
+            days_back = (today_local() - resolved.date()).days + 1
             raw = get_student_sessions_by_type(
                 student.student_id, student.participant_id,
                 filter_type="P",
-                from_date=_date2.today().strftime("%Y-%m-%d"),
+                from_date=today_local().strftime("%Y-%m-%d"),
                 days=days_back,
             )
         except MystudioOTPRequired as _otp_exc:
@@ -1454,10 +1456,7 @@ Be concise and friendly. Staff are busy — get to the point."""
             )
             if err:
                 return err
-            monday = resolved - timedelta(days=resolved.weekday())
-            monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
-            after_date = monday
-            week_end = monday + timedelta(days=7)
+            after_date, week_end = week_bounds(resolved)
         elif after_date_str:
             resolved, err = self._resolve_tool_date(
                 {"date_str": after_date_str}, key="date_str", default="today", allow_past=True
@@ -1469,7 +1468,7 @@ Be concise and friendly. Staff are busy — get to the point."""
         camp_name_filter = (tool_input.get("camp_name") or "").strip().lower()
         include_roster = bool(tool_input.get("include_roster", False))
 
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today = start_of_today_local()
         is_past = week_end is not None and week_end <= today
 
         def _camp_matches(query: str, title: str) -> bool:
@@ -1578,18 +1577,12 @@ Be concise and friendly. Staff are busy — get to the point."""
             )
             if err:
                 return err
-            monday = resolved - timedelta(days=resolved.weekday())
-            monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
-            after_date = monday
-            week_end = monday + timedelta(days=7)
+            after_date, week_end = week_bounds(resolved)
         else:
             # Default to next week if no date specified
-            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            days_until_monday = (7 - today.weekday()) % 7 or 7
-            after_date = today + timedelta(days=days_until_monday)
-            week_end = after_date + timedelta(days=7)
+            after_date, week_end = week_bounds(start_of_today_local() + timedelta(days=7))
 
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today = start_of_today_local()
         is_past = week_end is not None and week_end <= today
 
         try:

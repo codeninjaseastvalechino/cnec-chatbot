@@ -10,10 +10,11 @@ Confirmed endpoints (from Playwright network capture 2026-05-31):
 
 import time
 from typing import List, Dict, Any, Optional
-from datetime import datetime, date
+from datetime import datetime
 from urllib.parse import urlencode
 
 from config.settings import settings
+from core.date_utils import today_local
 from core.logger import get_logger
 from sites.mystudio.auth import get_session, clear_cached_cookies, MystudioOTPRequired
 from sites.mystudio.appointments import StudentAppointment
@@ -62,7 +63,7 @@ def get_todays_appointments() -> List[StudentAppointment]:
     Returns:
         List of StudentAppointment objects sorted by start_time
     """
-    today_str = date.today().strftime("%Y-%m-%d")
+    today_str = today_local().strftime("%Y-%m-%d")
     return get_appointments_for_date(today_str)
 
 

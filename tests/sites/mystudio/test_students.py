@@ -170,9 +170,8 @@ class TestGetStudentAttendanceThisWeek:
     def test_passes_monday_as_from_date(self):
         mock_session = self._make_session_with_past_sessions([])
         with patch("sites.mystudio.students.get_session", return_value=mock_session):
-            with patch("sites.mystudio.students.date") as mock_date:
-                mock_date.today.return_value = date(2026, 6, 4)  # Thursday
-                mock_date.side_effect = lambda *a, **k: date(*a, **k)
+            # attendance anchors "this week" via today_local() -> week_bounds()
+            with patch("sites.mystudio.students.today_local", return_value=date(2026, 6, 4)):  # Thursday
                 get_student_attendance_this_week("259103", "296114")
         call_params = mock_session.get.call_args[1]["params"]
         assert call_params["class_filter_date"] == "2026-06-01"  # Monday

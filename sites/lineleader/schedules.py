@@ -41,6 +41,7 @@ from datetime import date, datetime, timezone
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
 from config.settings import settings
+from core.date_utils import today_local
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -100,7 +101,7 @@ def get_upcoming_gbs_tours(
     """
     from datetime import datetime as dt
 
-    cutoff = date.today()
+    cutoff = today_local()
     if after_date:
         try:
             cutoff = dt.strptime(after_date, "%Y-%m-%d").date()
@@ -166,7 +167,7 @@ def get_todays_sessions(bearer_token: str) -> List[GBSSession]:
     Returns:
         List of GBSSession objects sorted by start time.
     """
-    today = date.today()
+    today = today_local()
     return get_sessions_for_date(bearer_token, today.strftime("%Y-%m-%d"))
 
 
@@ -248,7 +249,7 @@ def _calculate_age(dob_str: str) -> Optional[int]:
     """Calculate age in years from an ISO date string (e.g. '2021-12-09')."""
     try:
         dob = date.fromisoformat(dob_str)
-        today = date.today()
+        today = today_local()
         return today.year - dob.year - (
             (today.month, today.day) < (dob.month, dob.day)
         )

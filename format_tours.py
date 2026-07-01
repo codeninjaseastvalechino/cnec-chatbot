@@ -4,6 +4,7 @@ Format GBS tours and student appointments for display and export.
 
 from typing import List, Union
 from datetime import datetime
+from core.date_utils import now_local
 
 
 def format_tours_as_bullets(sessions) -> str:
@@ -74,7 +75,7 @@ def format_unified_schedule(gbs_sessions, appointments, date=None) -> str:
         return "No schedule for today."
 
     if not date:
-        date = datetime.now()
+        date = now_local()
 
     # Create unified list with (start_time, type, name, detail) tuples
 
@@ -133,9 +134,9 @@ def get_sample_sessions():
     Create sample GBSSession objects for testing.
     """
     from sites.lineleader.schedules import GBSSession
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
-    today = datetime.now()
+    today = now_local()
 
     sessions = [
         GBSSession(
