@@ -9,6 +9,7 @@ Confirmed endpoints (from Playwright network capture 2026-05-31):
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from urllib.parse import urlencode
@@ -129,13 +130,33 @@ def get_appointments_for_date(date_str: str) -> List[StudentAppointment]:
         len(time_slots), len(non_empty),
     )
 
-    # Step 3: Fetch student roster for each non-empty time slot
+    # Step 3: Fetch student rosters for all non-empty slots in parallel.
+    # Each roster is an independent ~1s MyStudio call, so fetching them
+    # concurrently turns an N-serial wait into roughly one round trip. The
+    # shared keep-alive Session's pool (maxsize=25) handles the concurrency.
+    # Dedup + parse run after collection so no shared state is mutated across
+    # threads; executor.map preserves slot order, so "first slot wins" dedup
+    # behaves exactly as the old sequential loop.
+    # Cap sized to a full center day (~11 non-empty slots: 3:00–6:30 half-hour
+    # blocks + JR + AI/Robotics) plus headroom, so a busy day fetches in one
+    # wave instead of two. Peak is well under the Session pool (maxsize=25).
+    roster_start = time.monotonic()
+    workers = min(12, len(non_empty))
+    if workers <= 1:
+        rosters = [
+            _get_slot_roster(session, s["class_appointment_times_id"], date_str)
+            for s in non_empty
+        ]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            rosters = list(executor.map(
+                lambda s: _get_slot_roster(session, s["class_appointment_times_id"], date_str),
+                non_empty,
+            ))
+
     seen_class_reg_ids = set()
     appointments = []
-    roster_start = time.monotonic()
-
-    for slot in non_empty:
-        students = _get_slot_roster(session, slot["class_appointment_times_id"], date_str)
+    for slot, students in zip(non_empty, rosters):
         for student in students:
             reg_id = student.get("class_reg_id", "")
             if reg_id in seen_class_reg_ids:
