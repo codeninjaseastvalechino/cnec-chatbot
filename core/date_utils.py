@@ -55,6 +55,31 @@ def week_bounds(dt) -> Tuple[datetime, datetime]:
     d = dt.date() if isinstance(dt, datetime) else dt
     monday = datetime.combine(d - timedelta(days=d.weekday()), datetime.min.time())
     return monday, monday + timedelta(days=7)
+
+
+def relative_week_anchor(phrase: str, today: datetime) -> Optional[datetime]:
+    """Resolve a relative-week phrase to an anchor date inside the target week.
+
+    resolve_date() only understands concrete dates and "week of <date>"; the
+    bare relative phrases below would otherwise fail with "could not understand
+    the date". Returns an anchor datetime (pass to week_bounds) for a recognized
+    phrase, or None if the phrase isn't a relative-week expression (caller should
+    then fall back to normal date resolution). Matching is case/space-insensitive.
+    """
+    key = (phrase or "").strip().lower()
+    offsets = {
+        "this week": 0,
+        "next week": 7,
+        "last week": -7,
+        "previous week": -7,
+        "week after next": 14,
+        "the week after next": 14,
+    }
+    if key in offsets:
+        return today + timedelta(days=offsets[key])
+    return None
+
+
 _MONTH_MAP = {
     "january": 1, "february": 2, "march": 3, "april": 4,
     "may": 5, "june": 6, "july": 7, "august": 8,

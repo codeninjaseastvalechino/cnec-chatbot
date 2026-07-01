@@ -15,6 +15,7 @@ import os
 import asyncio
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from dotenv import dotenv_values
@@ -27,7 +28,7 @@ for key, value in env_vars.items():
         os.environ[key] = value
 
 from core.logger import get_logger
-from core.date_utils import now_local, today_local, start_of_today_local, week_bounds
+from core.date_utils import now_local, today_local, start_of_today_local, week_bounds, relative_week_anchor
 from config.settings import settings
 from llm_provider import get_provider
 from analytics import QueryAnalytics
@@ -200,6 +201,13 @@ class ChatbotEngine:
         logger.info("User query: %s", user_message[:120])
         request_start = time.monotonic()
         _tracker = self._analytics.start_query(user_message, query_type="natural_language", user=user_name)
+
+        # Per-turn memoization for expensive read tools. Claude sometimes fires
+        # the same query twice in one turn under two phrasings (e.g. "next week"
+        # and "week of July 7th") that resolve to the identical window. Handlers
+        # key results here so the second call returns instantly instead of
+        # redoing the whole fetch. Reset every turn — never persists across turns.
+        self._turn_cache = {}
 
         # Remove any orphaned tool_use blocks left by a previously interrupted turn.
         # Must run before appending the new user message so we don't create two
@@ -655,7 +663,10 @@ Be concise and friendly. Staff are busy — get to the point."""
                 "Use week_of_date_str to scope by week (e.g. 'next week', 'week of July 6'). "
                 "Use camp_name to filter to a specific camp. "
                 "Returns total revenue, per-camp breakdown, and flags anomalies: "
-                "comped kids ($0), discounts, cancelled registrations, and family patterns."
+                "comped kids ($0), discounts, cancelled registrations, and family patterns. "
+                "IMPORTANT: call this tool exactly ONCE per question. Pass the user's raw "
+                "phrase verbatim in week_of_date_str — do not resolve it to a date yourself "
+                "and do not also issue a second call with a rephrased/resolved date."
             ),
             parameters={
                 "week_of_date_str": {
@@ -1572,18 +1583,36 @@ Be concise and friendly. Staff are busy — get to the point."""
         week_end = None
 
         if week_of_str:
-            resolved, err = self._resolve_tool_date(
-                {"date_str": week_of_str}, key="date_str", default="today", allow_past=True
-            )
-            if err:
-                return err
-            after_date, week_end = week_bounds(resolved)
+            # Relative-week phrases ("next week", "this week", "last week") aren't
+            # understood by resolve_date — it only handles concrete dates and
+            # "week of <date>". Map them here so the phrases the tool advertises
+            # actually work instead of returning "could not understand the date".
+            anchor = relative_week_anchor(week_of_str, start_of_today_local())
+            if anchor is not None:
+                after_date, week_end = week_bounds(anchor)
+            else:
+                resolved, err = self._resolve_tool_date(
+                    {"date_str": week_of_str}, key="date_str", default="today", allow_past=True
+                )
+                if err:
+                    return err
+                after_date, week_end = week_bounds(resolved)
         else:
             # Default to next week if no date specified
             after_date, week_end = week_bounds(start_of_today_local() + timedelta(days=7))
 
         today = start_of_today_local()
         is_past = week_end is not None and week_end <= today
+
+        # Collapse duplicate calls within a turn: two phrasings ("next week" /
+        # "week of July 7th") resolve to the same window, so key on the resolved
+        # window + camp filter, not the raw phrase.
+        if not hasattr(self, "_turn_cache"):
+            self._turn_cache = {}
+        cache_key = ("camp_revenue", after_date, week_end, camp_name_filter)
+        if cache_key in self._turn_cache:
+            logger.info("camp_revenue: turn-cache hit — skipping duplicate fetch for %s", cache_key)
+            return self._turn_cache[cache_key]
 
         try:
             if is_past:
@@ -1608,29 +1637,62 @@ Be concise and friendly. Staff are busy — get to the point."""
             if not camps:
                 return f"No camps matching '{tool_input.get('camp_name')}' found for that week."
 
-        if len(camps) > 8:
+        # Cap raised from 8 → 15: camps are now computed concurrently (see the
+        # ThreadPoolExecutor below), so a full school-track week of ~12 camps
+        # finishes in ~7s. 15 leaves headroom without risking a runaway batch.
+        if len(camps) > 15:
             return (
                 f"Found {len(camps)} camps — that's a lot to compute revenue for individually. "
                 "Try narrowing by camp name or a specific week."
             )
 
-        results = []
-        for camp in camps:
+        logger.info(
+            "camp_revenue: computing %d camp(s) for %s–%s: %s",
+            len(camps),
+            after_date.strftime("%b %-d") if after_date else "?",
+            week_end.strftime("%b %-d") if week_end else "?",
+            ", ".join(c.title[:35] for c in camps),
+        )
+        rev_t0 = time.perf_counter()
+
+        # Compute camps concurrently. Each get_camp_revenue() also parallelizes
+        # its own kids, so peak connections ≈ outer × inner. Cap the outer pool
+        # at 6 (a normal week's camp count) — with our small camps the realistic
+        # peak is ~24 connections. Drop this to 3 if MyStudio ever rate-limits.
+        # OTP expiry can't early-return from inside a worker, so we let it raise
+        # out of the pool and handle it here; all other per-camp errors are
+        # isolated so one bad camp doesn't sink the batch. map() preserves order.
+        def _safe_revenue(camp):
             try:
-                result = get_camp_revenue(camp)
-            except MystudioOTPRequired as _otp_exc:
-                self._awaiting_mystudio_otp = True
-                return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
+                return get_camp_revenue(camp)
+            except MystudioOTPRequired:
+                raise  # bubble up to trigger the OTP prompt below
             except Exception as e:
                 logger.error("get_camp_revenue failed for %s: %s", camp.event_id, e)
-                result = {"error": str(e), "camp": camp}
-            results.append(result)
+                return {"error": str(e), "camp": camp}
+
+        try:
+            workers = min(6, len(camps))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                results = list(executor.map(_safe_revenue, camps))
+        except MystudioOTPRequired as _otp_exc:
+            self._awaiting_mystudio_otp = True
+            return self._otp_prompt(gmail_error=getattr(_otp_exc, "gmail_error", None))
+
+        grand_total = sum(r.get("total", 0.0) for r in results)
+        logger.info(
+            "camp_revenue: %d camp(s) done in %.1fs | grand total $%.2f",
+            len(results), time.perf_counter() - rev_t0, grand_total,
+        )
 
         if len(results) == 1:
-            return format_camp_revenue(results[0])
+            output = format_camp_revenue(results[0])
+        else:
+            parts = [format_week_revenue(results), ""]
+            for r in results:
+                parts.append(format_camp_revenue(r))
+                parts.append("")
+            output = "\n".join(parts)
 
-        parts = [format_week_revenue(results), ""]
-        for r in results:
-            parts.append(format_camp_revenue(r))
-            parts.append("")
-        return "\n".join(parts)
+        self._turn_cache[cache_key] = output
+        return output

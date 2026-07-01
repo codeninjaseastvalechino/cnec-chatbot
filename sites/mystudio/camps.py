@@ -18,6 +18,8 @@ Discovery flow (parent_id is dynamic — changes each year):
 """
 
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -454,6 +456,103 @@ def _get_roster_raw_rows(event_id: str, parent_id: str = "", event_list_type: st
         return None
 
 
+def _compute_kid_revenue(p: Dict[str, Any], camp: CampRecord, expected: float) -> Dict[str, Any]:
+    """
+    Resolve one enrolled participant's paid amount for a camp.
+
+    Makes up to two network calls (find_student_by_name if roster lacked IDs,
+    then getParticipantRegDetails). Pure per-kid work — no shared mutable state —
+    so it is safe to run concurrently across participants. Each network helper
+    builds its own requests.Session, so there is no shared HTTP client to race on.
+    """
+    from sites.mystudio.students import find_student_by_name, get_student_details as _get_details
+
+    pid = p["participant_id"]
+    sid = p["student_id"]
+    name = p["name"]
+    buyer = p["buyer_name"]
+
+    # If roster didn't include IDs, find them via name search
+    if not (pid and sid):
+        results = find_student_by_name(name)
+        if not results:
+            logger.warning("camp_revenue: student not found by name: %s", name)
+            return {
+                "name": name, "buyer_name": buyer,
+                "paid_amount": 0.0, "status": "not_found", "cancelled": False,
+                "renamed_from": None,
+            }
+        # Match by buyer last name if possible
+        buyer_last = buyer.split(",")[0].strip().lower()
+        match = next(
+            (r for r in results if buyer_last and buyer_last in r.parent_name.lower()),
+            results[0],
+        )
+        pid = match.participant_id
+        sid = match.student_id
+
+    details = _get_details(sid, pid)
+    if not details:
+        logger.warning("camp_revenue: could not fetch details for %s (pid=%s)", name, pid)
+        return {
+            "name": name, "buyer_name": buyer,
+            "paid_amount": 0.0, "status": "fetch_error", "cancelled": False,
+            "renamed_from": None,
+        }
+
+    event_details = details.get("reg_details", {}).get("event_details", [])
+
+    active_entry = next(
+        (e for e in event_details
+         if str(e.get("event_id")) == str(camp.event_id)
+         and e.get("payment_status_label") == "Active"),
+        None,
+    )
+    cancelled_entry = next(
+        (e for e in event_details
+         if str(e.get("event_id")) == str(camp.event_id)
+         and e.get("payment_status_label") == "Cancelled"),
+        None,
+    )
+
+    paid = float(active_entry["paid_amount"]) if active_entry else 0.0
+    status = active_entry["payment_status_label"] if active_entry else (
+        "cancelled" if cancelled_entry else "not_found"
+    )
+    renamed_from = None
+
+    # Camp rename detection: if exact match shows $0, check for another Active
+    # entry on the same camp date with a positive paid_amount. This handles the
+    # case where a kid was migrated to a renamed event_id — revenue lives on the
+    # old entry.
+    if paid == 0.0 and status == "Active":
+        camp_date_str = camp.start_dt.strftime("%b %-d, %Y")  # e.g. "Jun 22, 2026"
+        same_date_paid = next(
+            (e for e in event_details
+             if str(e.get("event_id")) != str(camp.event_id)
+             and e.get("payment_status_label") == "Active"
+             and float(e.get("paid_amount", 0)) > 0
+             and e.get("start_date", "") == camp_date_str),
+            None,
+        )
+        if same_date_paid:
+            paid = float(same_date_paid["paid_amount"])
+            renamed_from = same_date_paid.get("event_title", "")
+            logger.info(
+                "camp_revenue: %s — $0 on event %s, using $%.2f from renamed event '%s'",
+                name, camp.event_id, paid, renamed_from,
+            )
+
+    return {
+        "name": name,
+        "buyer_name": buyer,
+        "paid_amount": paid,
+        "status": status,
+        "cancelled": cancelled_entry is not None,
+        "renamed_from": renamed_from,
+    }
+
+
 def get_camp_revenue(camp: CampRecord) -> Dict[str, Any]:
     """
     Compute revenue for one camp via N+1 calls to getParticipantRegDetails.
@@ -470,14 +569,15 @@ def get_camp_revenue(camp: CampRecord) -> Dict[str, Any]:
         "kids": [{"name", "buyer_name", "paid_amount", "status", "cancelled"}, ...]
       }
     """
-    from sites.mystudio.students import find_student_by_name, get_student_details as _get_details
-
     expected = _expected_camp_price(camp.title)
+    t0 = time.perf_counter()
 
     today = start_of_today_local()
     list_type = "D" if camp.start_dt < today else "P"
     rows = _get_roster_raw_rows(camp.event_id, camp.parent_id, event_list_type=list_type)
     if rows is None:
+        logger.warning("camp_revenue: '%s' (%s) — roster fetch failed after %.2fs",
+                       camp.title[:45], camp.event_id, time.perf_counter() - t0)
         return {"error": "Failed to fetch roster", "camp": camp, "expected_price": expected}
 
     # Deduplicate by participant_id if available in row, else by name
@@ -496,96 +596,27 @@ def get_camp_revenue(camp: CampRecord) -> Dict[str, Any]:
             }
 
     if not seen:
+        logger.info("camp_revenue: '%s' (%s) — 0 enrolled, $0.00 (%.2fs)",
+                    camp.title[:45], camp.event_id, time.perf_counter() - t0)
         return {"camp": camp, "total": 0.0, "enrolled": 0, "kids": [], "expected_price": expected}
-    kids_data: List[Dict[str, Any]] = []
 
-    for key, p in seen.items():
-        pid = p["participant_id"]
-        sid = p["student_id"]
-        name = p["name"]
-        buyer = p["buyer_name"]
-
-        # If roster didn't include IDs, find them via name search
-        if not (pid and sid):
-            results = find_student_by_name(name)
-            if not results:
-                logger.warning("camp_revenue: student not found by name: %s", name)
-                kids_data.append({
-                    "name": name, "buyer_name": buyer,
-                    "paid_amount": 0.0, "status": "not_found", "cancelled": False,
-                })
-                continue
-            # Match by buyer last name if possible
-            buyer_last = buyer.split(",")[0].strip().lower()
-            match = next(
-                (r for r in results if buyer_last and buyer_last in r.parent_name.lower()),
-                results[0],
-            )
-            pid = match.participant_id
-            sid = match.student_id
-
-        details = _get_details(sid, pid)
-        if not details:
-            logger.warning("camp_revenue: could not fetch details for %s (pid=%s)", name, pid)
-            kids_data.append({
-                "name": name, "buyer_name": buyer,
-                "paid_amount": 0.0, "status": "fetch_error", "cancelled": False,
-            })
-            continue
-
-        event_details = details.get("reg_details", {}).get("event_details", [])
-
-        active_entry = next(
-            (e for e in event_details
-             if str(e.get("event_id")) == str(camp.event_id)
-             and e.get("payment_status_label") == "Active"),
-            None,
+    # Resolve each enrolled kid's payment in parallel. Each kid needs up to two
+    # sequential network calls (name lookup + reg details); running them
+    # concurrently turns an N-serial fan-out into a single round-trip-ish wait.
+    # executor.map preserves input order so output stays deterministic.
+    kids_list = list(seen.values())
+    workers = min(8, len(kids_list))
+    logger.info("camp_revenue: '%s' (%s) — resolving %d kids in parallel (%d workers)",
+                camp.title[:45], camp.event_id, len(kids_list), workers)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        kids_data = list(
+            executor.map(lambda p: _compute_kid_revenue(p, camp, expected), kids_list)
         )
-        cancelled_entry = next(
-            (e for e in event_details
-             if str(e.get("event_id")) == str(camp.event_id)
-             and e.get("payment_status_label") == "Cancelled"),
-            None,
-        )
-
-        paid = float(active_entry["paid_amount"]) if active_entry else 0.0
-        status = active_entry["payment_status_label"] if active_entry else (
-            "cancelled" if cancelled_entry else "not_found"
-        )
-        renamed_from = None
-
-        # Camp rename detection: if exact match shows $0, check for another Active
-        # entry on the same camp date with a positive paid_amount. This handles the
-        # case where a kid was migrated to a renamed event_id — revenue lives on the
-        # old entry.
-        if paid == 0.0 and status == "Active":
-            camp_date_str = camp.start_dt.strftime("%b %-d, %Y")  # e.g. "Jun 22, 2026"
-            same_date_paid = next(
-                (e for e in event_details
-                 if str(e.get("event_id")) != str(camp.event_id)
-                 and e.get("payment_status_label") == "Active"
-                 and float(e.get("paid_amount", 0)) > 0
-                 and e.get("start_date", "") == camp_date_str),
-                None,
-            )
-            if same_date_paid:
-                paid = float(same_date_paid["paid_amount"])
-                renamed_from = same_date_paid.get("event_title", "")
-                logger.info(
-                    "camp_revenue: %s — $0 on event %s, using $%.2f from renamed event '%s'",
-                    name, camp.event_id, paid, renamed_from,
-                )
-
-        kids_data.append({
-            "name": name,
-            "buyer_name": buyer,
-            "paid_amount": paid,
-            "status": status,
-            "cancelled": cancelled_entry is not None,
-            "renamed_from": renamed_from,
-        })
 
     total = sum(k["paid_amount"] for k in kids_data if k["status"] == "Active")
+    elapsed = time.perf_counter() - t0
+    logger.info("camp_revenue: '%s' (%s) — %d enrolled, $%.2f (%.2fs)",
+                camp.title[:45], camp.event_id, len(kids_data), total, elapsed)
     return {
         "camp": camp,
         "total": total,

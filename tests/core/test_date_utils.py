@@ -6,6 +6,7 @@ from unittest.mock import patch
 from core.date_utils import (
     resolve_date, resolve_time, resolve_datetime,
     now_local, today_local, start_of_today_local, week_bounds,
+    relative_week_anchor,
 )
 
 TODAY = date(2026, 6, 4)   # Thursday
@@ -262,6 +263,48 @@ class TestClockHelpers:
         monday, nxt = week_bounds(datetime(2026, 6, 4, 15, 30))
         assert monday == datetime(2026, 6, 1)
         assert nxt == datetime(2026, 6, 8)
+
+
+class TestRelativeWeekAnchor:
+    # Anchor is Thursday 2026-07-01 (the app's "today" during this work).
+    TODAY = datetime(2026, 7, 1)
+
+    def test_this_week(self):
+        assert relative_week_anchor("this week", self.TODAY) == self.TODAY
+
+    def test_next_week(self):
+        assert relative_week_anchor("next week", self.TODAY) == datetime(2026, 7, 8)
+
+    def test_last_week(self):
+        assert relative_week_anchor("last week", self.TODAY) == datetime(2026, 6, 24)
+
+    def test_previous_week_is_alias_for_last_week(self):
+        assert relative_week_anchor("previous week", self.TODAY) == datetime(2026, 6, 24)
+
+    def test_week_after_next(self):
+        assert relative_week_anchor("week after next", self.TODAY) == datetime(2026, 7, 15)
+        assert relative_week_anchor("the week after next", self.TODAY) == datetime(2026, 7, 15)
+
+    def test_case_and_whitespace_insensitive(self):
+        assert relative_week_anchor("  NEXT WEEK  ", self.TODAY) == datetime(2026, 7, 8)
+
+    def test_resolves_into_the_correct_week_window(self):
+        # "next week" from Wed 2026-07-01 must land in the Mon Jul 6 – Jul 13 window
+        anchor = relative_week_anchor("next week", self.TODAY)
+        monday, nxt = week_bounds(anchor)
+        assert monday == datetime(2026, 7, 6)
+        assert nxt == datetime(2026, 7, 13)
+
+    def test_non_relative_phrase_returns_none(self):
+        # Concrete dates / "week of X" fall through to resolve_date, so this
+        # helper must decline them by returning None.
+        assert relative_week_anchor("week of July 6", self.TODAY) is None
+        assert relative_week_anchor("July 8th", self.TODAY) is None
+        assert relative_week_anchor("Friday", self.TODAY) is None
+
+    def test_empty_or_none_returns_none(self):
+        assert relative_week_anchor("", self.TODAY) is None
+        assert relative_week_anchor(None, self.TODAY) is None
 
     def test_next_week_idiom(self):
         # week_bounds(start_of_today + 7d) is how camp handlers compute "next week".

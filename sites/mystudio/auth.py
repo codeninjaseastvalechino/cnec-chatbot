@@ -61,7 +61,9 @@ def get_session() -> requests.Session:
     """
     cached = _load_cached_cookies()
     if cached:
-        logger.info("Using cached MyStudio cookies (30-day cache)")
+        # DEBUG, not INFO: get_session() is called once per API request, so at
+        # INFO this line spams the log dozens of times per revenue query.
+        logger.debug("Using cached MyStudio cookies (30-day cache)")
         return _build_session_from_cookies(cached)
 
     logger.info("No valid cached cookies — starting fresh login")
