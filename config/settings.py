@@ -52,9 +52,12 @@ class Settings:
     MYSTUDIO_USERNAME: str = os.getenv("MYSTUDIO_USERNAME", "")
     MYSTUDIO_PASSWORD: str = os.getenv("MYSTUDIO_PASSWORD", "")
 
-    # Center-specific IDs (Code Ninjas Eastvale Chino — confirmed from live site)
-    MYSTUDIO_COMPANY_ID: str = "578"
-    MYSTUDIO_USER_ID: str = "9901"
+    # Center-specific IDs — REQUIRED from .env (no default on purpose).
+    # A hardcoded fallback would let a misconfigured center silently read/write
+    # Eastvale Chino's data (company_id 578). Failing loud is the safe, multi-tenant
+    # behavior (ADR-005). Eastvale's values: MYSTUDIO_COMPANY_ID=578, MYSTUDIO_USER_ID=9901
+    MYSTUDIO_COMPANY_ID: str = os.getenv("MYSTUDIO_COMPANY_ID", "")
+    MYSTUDIO_USER_ID: str = os.getenv("MYSTUDIO_USER_ID", "")
 
     # Cookie cache (session-based auth, not bearer token)
     MYSTUDIO_COOKIE_FILE: str = os.path.join(
@@ -65,6 +68,22 @@ class Settings:
 
     # ── Admin page ───────────────────────────────────────────────────────────
     ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "cnec-admin")
+
+    # ── Web session / multi-user isolation ───────────────────────────────────
+    # SECRET_KEY signs the Flask session cookie so each browser gets a tamper-proof
+    # session id (used to scope conversation history per user). MUST be set in .env
+    # for production — if empty, app.py falls back to an ephemeral key (sessions
+    # reset on restart). Generate one with: python3 -c "import secrets; print(secrets.token_hex(32))"
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "")
+    # Idle minutes before a browser's conversation context is dropped and started
+    # fresh. Code default is fine; override in .env only to tune.
+    SESSION_IDLE_MINUTES: int = int(os.getenv("SESSION_IDLE_MINUTES", "30"))
+
+    # ── Localization ─────────────────────────────────────────────────────────
+    # Center timezone — anchors "today"/"now" in the assistant's system prompt.
+    # Pinned here (not the host's TZ) so the date is correct regardless of where
+    # the app is deployed. Override per center in .env.
+    CENTER_TIMEZONE: str = os.getenv("CENTER_TIMEZONE", "America/Los_Angeles")
 
     # ── Gmail IMAP (2FA code extraction) ──────────────────────────────────────
     GMAIL_ADDRESS: str = os.getenv("GMAIL_ADDRESS", "").strip()
@@ -87,6 +106,10 @@ class Settings:
             missing.append("LINELEADER_USERNAME")
         if not self.LINELEADER_PASSWORD:
             missing.append("LINELEADER_PASSWORD")
+        if not self.MYSTUDIO_COMPANY_ID:
+            missing.append("MYSTUDIO_COMPANY_ID")
+        if not self.MYSTUDIO_USER_ID:
+            missing.append("MYSTUDIO_USER_ID")
         if missing:
             raise EnvironmentError(
                 f"Missing required .env keys: {', '.join(missing)}"
