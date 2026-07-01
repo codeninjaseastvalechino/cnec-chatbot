@@ -96,7 +96,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 ## Current Status
 
-**Last updated: 2026-06-26**
+**Last updated: 2026-07-01**
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
@@ -152,6 +152,44 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 - Keep the feature list in the panel driven from a data structure, not hardcoded strings, so it stays in sync as milestones complete
 - "Partial" and "blocked" items: show to staff (they manage expectations); consider hiding from any future customer-facing view
 - No new Python modules needed — this is purely a frontend/template change to `app.py`
+
+---
+
+### Session 2026-07-01 — Performance optimizations (parallelization + keep-alive)
+
+**Theme:** MyStudio's ~1.2s-per-call server latency dominates response time. We can't
+speed up their server, so the wins come from (a) overlapping independent calls
+(parallelization) and (b) not re-handshaking per call (session reuse).
+
+**Changes made:**
+- ✅ **`sites/mystudio/camps.py`** — camp revenue parallelized at two levels:
+  - `_compute_kid_revenue()` extracted from `get_camp_revenue`'s per-kid loop; the loop now runs via `ThreadPoolExecutor` (max 8). `executor.map` preserves order so output is unchanged.
+  - Per-camp timing/kid-count logs added; roster-fail and 0-enrolled paths log too.
+- ✅ **`chatbot.py` `_handle_get_camp_revenue`** — the camps loop parallelized via `ThreadPoolExecutor(min(6, len(camps)))`. OTP expiry can't early-return from a worker, so `_safe_revenue` re-raises `MystudioOTPRequired` out of the pool where it's handled; other per-camp errors are isolated. Batch cap raised 8 → 15 (parallel makes ~12-camp school-track weeks cheap — a 12-camp week computes in ~7s).
+- ✅ **`chatbot.py`** — per-turn dedup (`self._turn_cache`, reset each turn) keyed on the *resolved* week window + camp filter, so two phrasings ("next week" / "week of July 7th") that mean the same week compute once. Tool description hardened to call once.
+- ✅ **`core/date_utils.py` `relative_week_anchor()`** — new helper; "next/this/last week" were advertised by the revenue tool but errored in `resolve_date`. 9 unit tests.
+- ✅ **`sites/mystudio/auth.py`** — `get_session()` now memoizes ONE authenticated Session (`_cached_session` + `_session_lock`) instead of building a fresh one per call, so MyStudio calls share a keep-alive connection. `_new_session()` mounts `HTTPAdapter(pool_maxsize=25)` for the parallel bursts. `clear_cached_cookies()` drops the cached Session — it's the single hook every 401 re-auth path already calls. Cookie-hit log demoted INFO → DEBUG (was spamming ~15×/query).
+- ✅ **`sites/mystudio/schedules.py` `get_appointments_for_date`** — per-slot roster loop parallelized (`ThreadPoolExecutor(min(12, len(non_empty)))`, 12 = a full center day of ~11 slots). Dedup/parse after collection; `executor.map` preserves slot order so first-slot-wins dedup is unchanged.
+- ✅ **`chatbot.py` `_handle_lookup_student`** — `get_student_details` + `get_student_attendance_this_week` + `get_student_upcoming_appointments` run concurrently (independent — need only the resolved IDs); `get_membership_reg_details(reg_id)` still runs after (depends on details).
+
+**Measured live (identical results before/after in every case):**
+- Camp revenue (7-camp week): ~29s → ~4s (kids + camps parallel).
+- Schedule roster (busy day, 36 appts): 23.8s → ~7-10s (~2.3-3×).
+- Student lookup (duplicate-name): ~8.0s → ~6.3s; the parallelized 4-call portion ~halves (single-account students see a larger ratio, since `_resolve_student`'s duplicate loop is unparallelized).
+- Keep-alive: ~150ms/call saved (the handshake) on sequential ops.
+
+**Key discoveries / decisions:**
+- **Threading is safe here because it's I/O-bound** (network waits release the GIL) and each unit is self-contained: workers return values, `executor.map`/futures collect them — no shared mutable state, no locks needed in the hot path.
+- **`get_session()` built a NEW Session per call** — so keep-alive was never reused anywhere. Memoizing it is also more correct: a live Session captures mid-session `Set-Cookie` updates the rebuild-from-file path silently discarded.
+- **Worker caps sized to real workload, not guessed:** camps `min(6)` (validated across 4 weeks — outer=6 beat outer=3 every time; busiest month had 6 kids/camp so peak ~24 connections), schedule `min(12)` (~11 daily slots), kids `min(8)`. Peak concurrency stays under the Session pool (25).
+- **Skipped prompt caching (was "Step 2"):** on Haiku 4.5 the system+tools prefix is ~4,270 tokens (min cacheable is 4,096 — barely clears), Haiku is cheap, and the 5-min TTL rarely helps a low-traffic single center. Marginal — not worth the complexity.
+- **Nested parallelism multiplies threads:** outer camps × inner kids. Kept outer small (6) so peak ≈ outer × inner stays bounded.
+
+**Still open (backlog, roughly by leverage):**
+- `_initialize_session()` fires 3 sequential MyStudio calls on *every* schedule fetch (~4s of fixed overhead) — biggest remaining lever on the most common query.
+- LineLeader still uses bare `requests` (no shared Session) — small win, few calls.
+- Read caching (camp list long TTL; roster/student short TTL + bust-on-write) — eliminates whole calls but adds staleness complexity.
+- Streaming responses (perceived latency); quick-query bypass (deferred to M9).
 
 ---
 
