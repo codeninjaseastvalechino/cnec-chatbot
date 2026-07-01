@@ -13,8 +13,11 @@ import urllib.parse
 import requests
 import os
 import json
+import threading
 from datetime import datetime
 from typing import Dict, Optional
+
+from requests.adapters import HTTPAdapter
 
 from config.settings import settings
 from core.logger import get_logger
@@ -50,21 +53,52 @@ class MystudioOTPRequired(Exception):
 # Holds the partial session while waiting for user to enter OTP
 _pending_session: Optional[requests.Session] = None
 
+# Reused authenticated Session so MyStudio calls share one keep-alive connection
+# instead of re-doing a TLS handshake per request. Guarded by _session_lock
+# because Flask runs threaded=True and camp revenue fans calls out across threads.
+# Reset by clear_cached_cookies() — every 401 re-auth path already calls that.
+_cached_session: Optional[requests.Session] = None
+_session_lock = threading.Lock()
+
+
+def _new_session() -> requests.Session:
+    """Build a fresh Session with MyStudio headers and a connection pool sized
+    for our concurrent fan-out (camp revenue runs up to ~24 calls at once; the
+    urllib3 default pool_maxsize=1 would discard the extras instead of reusing)."""
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    adapter = HTTPAdapter(pool_connections=4, pool_maxsize=25)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
 
 def get_session() -> requests.Session:
     """
     Return an authenticated requests.Session with valid MyStudio cookies.
 
-    If cookies are cached (30 days), returns immediately.
+    Reuses a single Session across calls (keep-alive) so we don't re-handshake
+    per request. If cookies are cached (30 days), returns immediately.
     If GMAIL_ADDRESS + GMAIL_APP_PASSWORD are configured, auto-fetches OTP.
     Otherwise triggers OTP email and raises MystudioOTPRequired for manual entry.
     """
+    global _cached_session
+    with _session_lock:
+        if _cached_session is not None:
+            return _cached_session
+
     cached = _load_cached_cookies()
     if cached:
         # DEBUG, not INFO: get_session() is called once per API request, so at
         # INFO this line spams the log dozens of times per revenue query.
         logger.debug("Using cached MyStudio cookies (30-day cache)")
-        return _build_session_from_cookies(cached)
+        session = _build_session_from_cookies(cached)
+        with _session_lock:
+            # Another thread may have built one while we were loading — prefer
+            # the first winner so all callers share the same connection pool.
+            if _cached_session is None:
+                _cached_session = session
+            return _cached_session
 
     logger.info("No valid cached cookies — starting fresh login")
     return _start_login()
@@ -78,8 +112,7 @@ def _start_login() -> requests.Session:
     """
     global _pending_session
 
-    session = requests.Session()
-    session.headers.update(HEADERS)
+    session = _new_session()
 
     # Snapshot inbox before sending credentials so we only look at new emails
     inbox_uid_before_otp = _get_inbox_uid_snapshot()
@@ -184,6 +217,9 @@ def complete_otp_login(otp: str) -> requests.Session:
     session.cookies.set(f"c_u_id_{settings.MYSTUDIO_USER_ID}", email_cookie, domain=".mystudio.io")
 
     _save_cached_cookies(dict(session.cookies))
+    global _cached_session
+    with _session_lock:
+        _cached_session = session  # reuse the just-authenticated session going forward
     logger.info("MyStudio login complete, cookies cached for 30 days")
     return session
 
@@ -234,7 +270,13 @@ def verify_and_refresh_session() -> bool:
 
 
 def clear_cached_cookies() -> None:
-    """Delete the cookie cache file — forces fresh login on next get_session() call."""
+    """Delete the cookie cache file and drop the in-memory Session — forces a
+    fresh login on the next get_session() call. This is the single invalidation
+    hook every 401 re-auth path calls, so resetting the Session here keeps the
+    keep-alive cache from serving a dead session after re-auth."""
+    global _cached_session
+    with _session_lock:
+        _cached_session = None
     cache_file = settings.MYSTUDIO_COOKIE_FILE
     if os.path.exists(cache_file):
         os.remove(cache_file)
@@ -276,8 +318,7 @@ def _save_cached_cookies(cookies: Dict[str, str]) -> None:
 
 def _build_session_from_cookies(cookies: Dict[str, str]) -> requests.Session:
     """Build a requests.Session from a cookies dict."""
-    session = requests.Session()
-    session.headers.update(HEADERS)
+    session = _new_session()
 
     for name, value in cookies.items():
         session.cookies.set(name, value, domain=".mystudio.io")
