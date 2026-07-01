@@ -30,31 +30,36 @@ def _initialize_session(session) -> None:
     """
     Call initialization endpoints that the browser calls after login.
     These must be called before getClassdatatabledetails will work.
+
+    Their responses are discarded — they only prime server-side session state,
+    which persists for the Session's lifetime. So we run them ONCE per Session
+    (tracked via a flag on the object; a re-auth builds a new Session and
+    re-primes) and fire the three independent calls concurrently.
     """
+    if getattr(session, "_cnec_initialized", False):
+        return
+
+    def _prime(path, params):
+        session.get(f"{BASE_URL}/{path}", params=params, timeout=10)
+
     try:
-        # checkClassScheduleFeatureAvailabilty
-        session.get(f"{BASE_URL}/checkClassScheduleFeatureAvailabilty", params={
-            "class_scheduler_verion": "2",
-            "company_id": COMPANY_ID,
-        }, timeout=10)
-        logger.debug("Called checkClassScheduleFeatureAvailabilty")
-
-        # getMenuNames
-        session.get(f"{BASE_URL}/getMenuNames", params={
-            "company_id": COMPANY_ID,
-        }, timeout=10)
-        logger.debug("Called getMenuNames")
-
-        # getCustomFieldTitle
-        session.get(f"{BASE_URL}/getCustomFieldTitle", params={
-            "company_id": COMPANY_ID,
-            "from": "R",
-        }, timeout=10)
-        logger.debug("Called getCustomFieldTitle")
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = [
+                executor.submit(_prime, "checkClassScheduleFeatureAvailabilty",
+                                {"class_scheduler_verion": "2", "company_id": COMPANY_ID}),
+                executor.submit(_prime, "getMenuNames",
+                                {"company_id": COMPANY_ID}),
+                executor.submit(_prime, "getCustomFieldTitle",
+                                {"company_id": COMPANY_ID, "from": "R"}),
+            ]
+            for f in futures:
+                f.result()
+        session._cnec_initialized = True
+        logger.debug("Session primed (3 init endpoints, parallel)")
 
     except Exception as e:
         logger.warning("Error during session initialization: %s", e)
-        # Don't fail if init calls fail, continue anyway
+        # Don't fail if init calls fail, and don't mark primed — retry next time.
 
 
 def get_todays_appointments() -> List[StudentAppointment]:
