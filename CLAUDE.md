@@ -59,7 +59,7 @@ Always import from `typing`: `from typing import Optional, List, Dict, Any, Unio
 
 | Issue | Impact | Solution |
 |-------|--------|----------|
-| **Forgot `LLM_PROVIDER` env var** | App defaults to Claude, burns API credits silently | Always set `LLM_PROVIDER=claude` or use `TEST_MODE=true` for dev |
+| **Forgot `TEST_MODE=true` in dev** | Real Claude API calls burn credits silently | Use `TEST_MODE=true python3 app.py` for cost-free dev; real mode only for prod/validation |
 | **MyStudio OTP cookie expires silently** | Triggers re-login every 30 days | Auto-handled: app reads OTP from Gmail automatically (M8). No manual entry needed. |
 | **LineLeader token cached for ~1 hour** | Stale data if run after hour-long pause | Safe: 5-min buffer auto re-logins before expiry. Manual: `rm browser_state/lineleader_token.json` |
 | **Mock mode is instant, real mode is not** | Expectations mismatch during dev→prod switch | Mock mode: <10ms responses. Claude mode: ~500-800ms per query |
@@ -669,25 +669,25 @@ All credentials and configuration live in `.env` (copy from `.env.example`). Cri
 LineLeader was acquired by ChildCareCRM. After login it redirects to
 `my.childcarecrm.com`. The API lives at `live.childcarecrm.com/api/v3/`.
 
-### Auth flow (OAuth2 with PKCE)
+### Auth flow (OAuth2 with PKCE — pure `requests`, no browser; see ADR-007)
 ```
-Playwright submits login form at login.lineleader.com
+GET /authorize (login.lineleader.com) → sets PHPSESSID
     ↓
-OAuth2 PKCE flow runs automatically (CSRF tokens + code challenges)
+GET /login → parse the server-rendered `_csrf_token` from the login HTML
     ↓
-Browser lands on my.childcarecrm.com
+POST credentials (_csrf_token + _username + _password) → 302 redirect chain
     ↓
-App calls live.childcarecrm.com/api/v3/sso/login → returns Bearer JWT
+callback my.childcarecrm.com/#/code?code=... → extract the auth code
     ↓
-We intercept that response and extract the Bearer token
+POST live.childcarecrm.com/api/v3/sso/login {code, code_verifier} → Bearer JWT
     ↓
-Token saved to browser_state/lineleader_token.json with expiry
+Token cached to browser_state/lineleader_token.json with expiry (~1 hour)
     ↓
-All subsequent API calls use requests (no browser) with Bearer token
+All subsequent API calls use requests with Authorization: Bearer <token>
 ```
 
-Why Playwright for login: The PKCE flow uses server-generated CSRF tokens and
-cryptographic code challenges — can't replicate with raw requests.
+The whole flow is plain `requests` — the CSRF token is server-rendered in the
+login HTML (not JS-generated), so no browser is needed. See ADR-007.
 
 ### Confirmed API endpoints
 All at `https://live.childcarecrm.com/api/v3/`:
@@ -843,10 +843,10 @@ case-insensitive substring. e.g. `"Journei"`, `"Ashbourne"`, `"Wittie"` all matc
 }
 ```
 
-### Login form selectors (confirmed)
-- Username: `#username` (name="_username")
-- Password: `#password` (name="_password")
-- Submit: `button[type="submit"]`
+### Login form fields (posted directly via `requests`, no DOM)
+- `_username` — the login email
+- `_password` — the password
+- `_csrf_token` — parsed from the server-rendered login HTML before the POST
 
 ---
 
@@ -1316,7 +1316,7 @@ python3 run_milestone1.py
 ```
 
 **What it does:**
-1. Logs in to LineLeader (headless by default, token cached ~1 hour)
+1. Logs in to LineLeader (pure-requests OAuth2 PKCE, token cached ~1 hour)
 2. Fetches today's Tours and displays formatted table with child names/ages
 3. Prompts: "Reschedule a tour? (y/n)"
 4. If yes: enter by tour number (e.g. `1`) or name (e.g. `Journei`)
@@ -1498,7 +1498,7 @@ Useful for diagnosing CSRF token extraction failures or redirect chain changes.
 
 **Details:** Token is cached with expiry (~1 hour from login). A 5-minute safety buffer means re-login happens if token is < 5 min from expiry. If it somehow expires mid-session:
 
-1. Automatic re-login is triggered (Playwright logs in again, new token cached)
+1. Automatic re-login is triggered (pure-requests OAuth2 PKCE flow, new token cached)
 2. Operation retries with new token
 3. If re-login fails, user is asked to verify credentials
 
@@ -1564,9 +1564,27 @@ ping 192.168.x.x  # should work if on same network
 | **Chatbot engine only** | `python3 test_chatbot.py` | Free (mock) or $0.001-0.005 (Claude) | <1 sec (mock), ~500ms (Claude) | Tool calling & Claude integration |
 | **Full integration** | `python3 app.py` | $0.001-0.005/query | <1 sec | Pre-production validation |
 
-### Testing Approaches
+### Automated tests (pytest)
 
-**Current status:** Manual testing only. Unit tests (pytest) planned for Milestone 3+ (MyStudio/Homebase modules).
+**280 tests, all passing** — mocked at the `requests` boundary (no live calls, no cost):
+```bash
+python3 -m pytest tests/ -v
+```
+
+| Path | Covers |
+|------|--------|
+| `tests/core/test_date_utils.py` | date/time resolution, conflict detection, ordinals, relative-week anchors |
+| `tests/sites/lineleader/test_schedules.py` | tour parsing, age calc, PUT payload build, GBS filtering |
+| `tests/sites/mystudio/test_schedules.py` | student→appointment parsing |
+| `tests/sites/mystudio/test_students.py` | student lookup, attendance, membership details |
+| `tests/sites/mystudio/test_write.py` | cancel/move success, flags, error paths |
+| `tests/sites/mystudio/test_camps.py` | camp helpers, filtering, revenue formatting, past-camp roster |
+| `tests/test_chatbot_helpers.py` | `_resolve_tool_date` |
+| `tests/test_llm_provider.py` | multi-tool extraction |
+
+Unit tests cover parsing / resolution / payload building / error paths — **not** live auth or the network. For end-to-end confidence, use the manual approaches below (read-only queries against real data are free and safe).
+
+### Manual testing approaches
 
 #### 1. Web UI — Mock Mode (Fastest, Zero Cost)
 ```bash
@@ -1606,40 +1624,12 @@ python3 app.py
 
 ---
 
-### When to Add Unit Tests (Milestone 2+)
+### Adding new tests
 
-Add pytest when:
-- Adding MyStudio or Homebase site modules (complex logic, high risk)
-- A module has more than one public function (testability needed)
-- For critical paths (login with 2FA, reschedule with confirmation, error recovery)
-
-### Unit Testing Strategy (Recommended)
-
-**Framework:** `pytest` + `pytest-asyncio` (we have async Playwright login)
-
-**What to mock:**
-- `requests` library (API calls) — use `monkeypatch` or `responses` library
-- `Playwright` navigation — avoid testing browser automation directly (too fragile, slow)
-
-**What to test:**
-- Auth token caching (expiry, refresh, invalidation)
-- Session/tour parsing (data structure integrity)
-- Name matching (fuzzy matching edge cases)
-- Error recovery (API failures, network timeouts)
-
-**Example fixture:**
-```python
-@pytest.fixture
-def mock_lineleader_api(monkeypatch):
-    def _mock(endpoint, response_json):
-        def mock_get(*args, **kwargs):
-            class MockResponse:
-                def json(self): return response_json
-                status_code = 200
-            return MockResponse()
-        monkeypatch.setattr("requests.get", mock_get)
-    return _mock
-```
+Mock `requests` (via `monkeypatch`) so tests stay offline and free. Cover the
+risky paths: date resolution, auth/token caching, roster/tour parsing, fuzzy
+name matching, write ops (cancel/move flags), and error recovery. Mirror the
+existing files under `tests/` — one test module per source module.
 
 ---
 
@@ -1799,9 +1789,9 @@ columns[3][data]="Buyer"
 
 **Session cookie caching:** Cookies cached to `browser_state/mystudio_cookies.json`. On day 31, app automatically prompts for new OTP. This IS the intended design, not a workaround.
 
-**Limitations:**
-- Gmail App Passwords unavailable (Google Workspace admin disabled them)
-- OTP entry is manual (user reads email, types 6-digit code in terminal)
+**OTP handling (M8 — automated):**
+- OTP is auto-extracted from Gmail via IMAP (`core/gmail_imap.py`) using `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` — no human in the loop.
+- Fallback: if Gmail creds are missing or polling times out, the app raises `MystudioOTPRequired` and prompts for the code in the chat UI.
 
 ---
 
@@ -1821,20 +1811,22 @@ columns[3][data]="Buyer"
 ### Auth Flow
 
 ```
-1. Playwright logs in at login.lineleader.com (form submission)
+1. GET /authorize (login.lineleader.com) → sets PHPSESSID
    ↓
-2. OAuth2 PKCE flow runs automatically (server generates CSRF + code challenges)
+2. GET /login → parse server-rendered _csrf_token from the login HTML
    ↓
-3. Browser redirects to my.childcarecrm.com
+3. POST credentials (_csrf_token + _username + _password) → 302 redirect chain
    ↓
-4. App calls POST /api/v3/sso/login → returns Bearer JWT
+4. Callback my.childcarecrm.com/#/code?code=... → extract auth code
    ↓
-5. Token cached to browser_state/lineleader_token.json (exp time + 5-min buffer)
+5. POST /api/v3/sso/login {code, code_verifier} → Bearer JWT
    ↓
-6. All subsequent API calls use: Authorization: Bearer <token>
+6. Token cached to browser_state/lineleader_token.json (exp time + 5-min buffer)
+   ↓
+7. All subsequent API calls use: Authorization: Bearer <token>
 ```
 
-**Why Playwright for login:** OAuth2 PKCE uses cryptographic code challenges and server-generated CSRF tokens across a multi-step redirect chain. Cannot replicate with raw requests.
+**Pure `requests`, no browser (ADR-007):** the CSRF token is server-rendered in the login HTML, so the whole PKCE flow runs with plain HTTP calls — no Playwright/Chromium.
 
 ### API Endpoints
 
@@ -1907,11 +1899,11 @@ Child names are NOT returned in the action-items response. Two-step lookup requi
 
 **Age calculation:** `date_of_birth` ISO string → `_calculate_age()` → display as `"Name (Xy)"` in table.
 
-### Login Form Selectors
+### Login Form Fields (posted via `requests`)
 
-- Username: `#username` (name="_username")
-- Password: `#password` (name="_password")
-- Submit: `button[type="submit"]`
+- `_username` — the login email
+- `_password` — the password
+- `_csrf_token` — parsed from the server-rendered login HTML before the POST
 
 ---
 
